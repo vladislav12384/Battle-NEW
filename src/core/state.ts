@@ -1,0 +1,223 @@
+/**
+ * Mutable simulation state. Everything here is plain JSON-serializable data
+ * so the whole world can be snapshotted/restored (rollback netcode, replays,
+ * save states in training mode).
+ */
+import type { InputBuffer, InputFrame } from './input';
+import type { RngState } from './math/rng';
+import type { Vec3 } from './math/vec3';
+import type { HitEffect } from './types';
+
+export type StateId =
+  | 'ground' // idle / walking / sprinting
+  | 'jumpsquat'
+  | 'air'
+  | 'land' // landing lag
+  | 'attack'
+  | 'block'
+  | 'blockstun'
+  | 'hitstun' // grounded hitstun
+  | 'juggle' // airborne hitstun
+  | 'knockdown'
+  | 'getup'
+  | 'tech' // ground roll / air recovery / knockdown roll
+  | 'stagger' // crumple, guard break, parried
+  | 'wallsplat'
+  | 'dodge'
+  | 'recoil' // clash or throw tech
+  | 'grabbing'
+  | 'grabbed'
+  | 'burst' // combo breaker
+  | 'ko';
+
+/** States in which a fighter is "being comboed". Leaving them ends the combo. */
+export const COMBO_STATES: ReadonlySet<StateId> = new Set<StateId>([
+  'hitstun',
+  'juggle',
+  'knockdown',
+  'wallsplat',
+  'stagger',
+  'grabbed',
+]);
+
+/** Combo bookkeeping lives on the VICTIM, so co-op attackers share one combo (and its limits). */
+export interface ComboState {
+  hits: number;
+  damage: number;
+  /** Juggle points spent so far. */
+  juggle: number;
+  startFrame: number;
+  attackers: number[];
+  groundBounceUsed: boolean;
+  wallBounceUsed: boolean;
+  wallSplatUsed: boolean;
+  otgHits: number;
+  /** False once the victim had a chance to act (tech/escape) and got hit anyway. */
+  trueCombo: boolean;
+}
+
+/** Properties of the last hit that matter when the victim hits the ground or a wall. */
+export interface ImpactFlags {
+  groundBounce: boolean;
+  wallSplat: boolean;
+  wallBounce: boolean;
+  hardKnockdown: boolean;
+}
+
+export interface FighterState {
+  id: number;
+  team: number;
+  charId: string;
+  name: string;
+  spawn: Vec3;
+  spawnYaw: number;
+
+  pos: Vec3;
+  vel: Vec3;
+  yaw: number;
+  aimPitch: number;
+  grounded: boolean;
+
+  state: StateId;
+  /** Frames spent in the current state (1 on the first processed frame). */
+  stateFrame: number;
+  /** Remaining stun / lag frames for timed states. */
+  stun: number;
+
+  // Current move
+  move: string | null;
+  moveFrame: number;
+  moveHit: boolean;
+  moveBlocked: boolean;
+  moveTarget: number;
+  /** "victimId:group" keys already hit by the current move. */
+  registry: string[];
+  charging: boolean;
+  chargeFrames: number;
+  armorLeft: number;
+  lungeLeft: number;
+
+  /** Freeze frames remaining (hit stop). */
+  hitstop: number;
+  /** Visual shake frames for the renderer (victim of a hit). */
+  shake: number;
+
+  health: number;
+  guard: number;
+  meter: number;
+  burst: number;
+  guardRegenDelay: number;
+  /** Guard was broken: refill when the stagger ends. */
+  guardBroken: boolean;
+
+  parryWindow: number;
+  parryCooldown: number;
+
+  dodgeAir: boolean;
+  dodgeDirX: number;
+  dodgeDirZ: number;
+  dodgeInvulnEnd: number;
+  dodgeChain: number;
+  dodgeChainTimer: number;
+  perfectDodged: boolean;
+  /** Perfect-dodge reward: dodge recovery can be cancelled into attacks. */
+  dodgeCounter: boolean;
+
+  airJumpsLeft: number;
+  airDodged: boolean;
+  helpless: boolean;
+  /** Landing lag to apply when a helpless fall ends. */
+  pendingLandLag: number;
+  running: boolean;
+
+  lockTarget: number;
+
+  combo: ComboState;
+  impact: ImpactFlags;
+  /** Victim could have acted since the last hit (used for "true combo" tracking). */
+  gap: boolean;
+  wallNX: number;
+  wallNZ: number;
+
+  grabPartner: number;
+  grabMove: string | null;
+
+  koTimer: number;
+
+  input: InputBuffer;
+  lastInput: InputFrame;
+}
+
+export interface ProjectileState {
+  id: number;
+  owner: number;
+  team: number;
+  charId: string;
+  moveId: string;
+  index: number;
+  pos: Vec3;
+  prevPos: Vec3;
+  vel: Vec3;
+  life: number;
+  radius: number;
+  hitsLeft: number;
+  registry: number[];
+  reflected: boolean;
+}
+
+export interface SimState {
+  frame: number;
+  nextId: number;
+  rng: RngState;
+  fighters: FighterState[];
+  projectiles: ProjectileState[];
+}
+
+// ------------------------------------------------------------------- events
+// Events are the bridge to presentation (VFX, sound, HUD). The simulation
+// never depends on them.
+
+export type GameEvent =
+  | {
+      type: 'hit';
+      attacker: number;
+      victim: number;
+      damage: number;
+      counter: boolean;
+      punish: boolean;
+      comboHits: number;
+      comboDamage: number;
+      trueCombo: boolean;
+      effect: HitEffect;
+      launch: boolean;
+      point: Vec3;
+      hitstop: number;
+    }
+  | { type: 'block'; attacker: number; victim: number; chip: number; guard: number; point: Vec3 }
+  | { type: 'parry'; attacker: number; victim: number; point: Vec3 }
+  | { type: 'guardBreak'; attacker: number; victim: number; point: Vec3 }
+  | { type: 'armor'; attacker: number; victim: number; damage: number; point: Vec3 }
+  | { type: 'clash'; a: number; b: number; point: Vec3 }
+  | { type: 'perfectDodge'; fighter: number; attacker: number }
+  | { type: 'attack'; fighter: number; move: string }
+  | { type: 'super'; fighter: number; move: string }
+  | { type: 'kiCancel'; fighter: number }
+  | { type: 'jump'; fighter: number; high: boolean }
+  | { type: 'land'; fighter: number }
+  | { type: 'dodge'; fighter: number }
+  | { type: 'tech'; fighter: number; kind: 'air' | 'ground' | 'roll' | 'throw' }
+  | { type: 'burst'; fighter: number; point: Vec3 }
+  | { type: 'wallSplat'; fighter: number; point: Vec3 }
+  | { type: 'wallBounce'; fighter: number; point: Vec3 }
+  | { type: 'groundBounce'; fighter: number; point: Vec3 }
+  | { type: 'knockdown'; fighter: number }
+  | { type: 'grab'; attacker: number; victim: number }
+  | { type: 'throw'; attacker: number; victim: number }
+  | { type: 'comboEnd'; victim: number; hits: number; damage: number; attackers: number[]; trueCombo: boolean }
+  | { type: 'ko'; fighter: number; attacker: number }
+  | { type: 'respawn'; fighter: number }
+  | { type: 'projectile'; id: number; owner: number }
+  | { type: 'projectileEnd'; id: number; point: Vec3 }
+  | { type: 'reflect'; id: number; fighter: number };
+
+export type GameEventType = GameEvent['type'];

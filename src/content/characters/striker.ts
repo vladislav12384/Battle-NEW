@@ -1,0 +1,602 @@
+/**
+ * "Striker" — the reference martial artist used to build and tune the combat
+ * system. Every system mechanic is exercised by at least one of these moves,
+ * so future characters (anime heroes, superheroes...) can be built by copying
+ * patterns from here.
+ *
+ * Frame math for links/chains (see docs/COMBAT_DESIGN.md):
+ *   A chain from move A (first active frame fA, hitstun H) into move B
+ *   (startup sB) cancelled on frame c is a TRUE combo if  c - fA + sB <= H.
+ *   Cancel windows below are chosen so every listed string is a true combo
+ *   when it hits, but has gaps (and is punishable) when blocked or late.
+ */
+import { DEG } from '../../core/math/vec3';
+import { Button } from '../../core/input';
+import type { CharacterDef, HitDef } from '../../core/types';
+import { box, moveList, sweep } from '../dsl';
+
+const { LIGHT: L, HEAVY: H, SPECIAL: E, SUPER: R, GRAB: G } = Button;
+
+// Shared knockback that keeps an airborne victim floating during air strings.
+const FLOAT = { fwd: 1, up: 4.6 };
+
+const barrageHit = (hand: 'lHand' | 'rHand', group: number, f0: number) =>
+  box([f0, f0 + 1], [hand === 'lHand' ? -0.1 : 0.1, 1.45, 0.85], 0.32, {
+    damage: 30,
+    hitstun: 22,
+    blockstun: 12,
+    hitstop: 4,
+    knockback: { fwd: 0.6, up: 0 },
+    airKnockback: { fwd: 0.4, up: 3.2 },
+    parryable: false,
+    juggleCost: 0,
+    effect: 'medium',
+    minScaling: 0.5,
+  }, { group, limb: hand });
+
+const throwHit: HitDef = {
+  damage: 110,
+  hitstun: 40,
+  blockstun: 0,
+  hitstop: 10,
+  knockback: { fwd: 7, up: 6.5 },
+  launch: true,
+  hardKnockdown: true,
+  wallSplat: true,
+  effect: 'throw',
+};
+
+export const striker: CharacterDef = {
+  id: 'striker',
+  name: 'Striker',
+  color: 0x3d7bfd,
+  stats: {
+    maxHealth: 1000,
+    maxGuard: 100,
+    weight: 1,
+    radius: 0.35,
+    height: 1.8,
+    eyeHeight: 1.65,
+    walkSpeed: 4.4,
+    runSpeed: 8,
+    blockWalkSpeed: 1.8,
+    jumpVelocity: 9.5,
+    airJumps: 1,
+    gravity: 27,
+    maxFallSpeed: 30,
+    airSpeed: 5,
+    groundAccel: 55,
+    airAccel: 18,
+  },
+
+  commands: [
+    { move: 'barrage', button: R, air: false },
+    { move: 'grab', button: G, air: false },
+    { move: 'shoulder_rush', button: E, dir: 'forward', air: false },
+    { move: 'rising_dragon', button: E, dir: 'back', air: false },
+    { move: 'ki_blast', button: E, air: false },
+    { move: 'air_ki_blast', button: E, air: true },
+    { move: 'flying_knee', button: H, running: true, air: false },
+    { move: 'dash_straight', button: H, dir: 'forward', air: false },
+    { move: 'rising_uppercut', button: H, dir: 'back', air: false },
+    { move: 'haymaker', button: H, air: false },
+    { move: 'axe_kick', button: H, air: true },
+    { move: 'jab', button: L, air: false },
+    { move: 'air_jab', button: L, air: true },
+  ],
+
+  moves: moveList([
+    // ------------------------------------------------------------ light string
+    // L, L, L, L  — jab, cross, hook, roundhouse (wall splat)
+    // L, L, H     — launcher (jump-cancel into an air combo)
+    // L, L, L, H  — hammer fist (ground bounce)
+    {
+      id: 'jab',
+      name: 'Jab',
+      kind: 'light',
+      startup: 5,
+      active: 2,
+      recovery: 11,
+      hitboxes: [
+        sweep([6, 7], [-0.12, 1.45, 0.35], [-0.08, 1.45, 0.8], 0.18, {
+          damage: 28,
+          hitstun: 17,
+          blockstun: 12,
+          hitstop: 6,
+          knockback: { fwd: 1.5, up: 0 },
+          airKnockback: FLOAT,
+          effect: 'light',
+        }, { limb: 'lHand' }),
+      ],
+      cancels: [{ button: L, into: 'cross', frames: [8, 17], on: 'always' }],
+    },
+    {
+      id: 'cross',
+      name: 'Cross',
+      kind: 'light',
+      startup: 6,
+      active: 2,
+      recovery: 13,
+      hitboxes: [
+        sweep([7, 8], [0.12, 1.45, 0.3], [0.06, 1.45, 0.85], 0.18, {
+          damage: 32,
+          hitstun: 18,
+          blockstun: 13,
+          hitstop: 7,
+          knockback: { fwd: 1.8, up: 0 },
+          airKnockback: FLOAT,
+          effect: 'light',
+        }, { limb: 'rHand' }),
+      ],
+      cancels: [
+        { button: L, into: 'hook', frames: [9, 18], on: 'always' },
+        { button: H, into: 'rising_uppercut', frames: [9, 16], on: 'always' },
+      ],
+    },
+    {
+      id: 'hook',
+      name: 'Hook',
+      kind: 'light',
+      startup: 7,
+      active: 3,
+      recovery: 15,
+      hitboxes: [
+        sweep([8, 10], [-0.55, 1.45, 0.35], [0.15, 1.45, 0.75], 0.2, {
+          damage: 38,
+          hitstun: 20,
+          blockstun: 14,
+          hitstop: 8,
+          knockback: { fwd: 2, up: 0, side: 0.8 },
+          airKnockback: FLOAT,
+          effect: 'medium',
+        }, { limb: 'lHand' }),
+      ],
+      cancels: [
+        { button: L, into: 'roundhouse', frames: [11, 18], on: 'always' },
+        { button: H, into: 'hammer', frames: [11, 16], on: 'always' },
+      ],
+    },
+    {
+      id: 'roundhouse',
+      name: 'Roundhouse',
+      kind: 'light',
+      priority: 2,
+      startup: 10,
+      active: 3,
+      recovery: 22,
+      hitboxes: [
+        sweep([11, 13], [0.6, 1.15, 0.2], [-0.2, 1.3, 0.95], 0.24, {
+          damage: 65,
+          hitstun: 30,
+          blockstun: 16,
+          hitstop: 12,
+          guardDamage: 25,
+          knockback: { fwd: 11, up: 3.5 },
+          wallSplat: true,
+          effect: 'heavy',
+        }, { limb: 'rFoot' }),
+      ],
+    },
+    {
+      id: 'rising_uppercut',
+      name: 'Rising Uppercut',
+      kind: 'heavy',
+      startup: 9,
+      active: 3,
+      recovery: 22,
+      hitboxes: [
+        sweep([10, 12], [0.1, 0.9, 0.55], [0.05, 1.95, 0.5], 0.24, {
+          damage: 55,
+          hitstun: 36,
+          blockstun: 15,
+          hitstop: 10,
+          knockback: { fwd: 1, up: 12.5 },
+          launch: true,
+          juggleCost: 2,
+          effect: 'launch',
+        }, { limb: 'rHand' }),
+      ],
+      jumpCancel: { frames: [13, 30], on: 'hit', high: true },
+    },
+    {
+      id: 'hammer',
+      name: 'Hammer Fist',
+      kind: 'heavy',
+      startup: 12,
+      active: 3,
+      recovery: 22,
+      hitboxes: [
+        sweep([13, 15], [0.1, 2.0, 0.55], [0.05, 0.8, 0.8], 0.26, {
+          damage: 70,
+          hitstun: 40,
+          blockstun: 18,
+          hitstop: 12,
+          guardDamage: 30,
+          knockback: { fwd: 1, up: -8 },
+          groundBounce: true,
+          juggleCost: 2,
+          effect: 'spike',
+        }, { limb: 'rHand' }),
+      ],
+      cancels: [{ button: H, into: 'rising_uppercut', frames: [17, 24], on: 'hit' }],
+    },
+
+    // ------------------------------------------------------------ heavies
+    {
+      id: 'haymaker',
+      name: 'Haymaker (hold to charge)',
+      kind: 'heavy',
+      startup: 14,
+      active: 3,
+      recovery: 22,
+      hitboxes: [
+        sweep([15, 17], [0.15, 1.5, 0.2], [0.05, 1.45, 1.0], 0.26, {
+          damage: 85,
+          hitstun: 24,
+          blockstun: 18,
+          hitstop: 11,
+          guardDamage: 30,
+          knockback: { fwd: 6, up: 0 },
+          airKnockback: { fwd: 5, up: 4 },
+          counter: { crumple: 55, hitstop: 16 },
+          effect: 'heavy',
+        }, { limb: 'rHand' }),
+      ],
+      charge: {
+        frame: 7,
+        button: H,
+        maxFrames: 45,
+        fullAt: 35,
+        damageBonus: 0.6,
+        fullHit: {
+          unblockable: true,
+          knockback: { fwd: 14, up: 3 },
+          wallSplat: true,
+          hitstop: 18,
+        },
+      },
+      cancels: [{ button: H, into: 'spin_backfist', frames: [18, 27], on: 'contact' }],
+    },
+    {
+      id: 'spin_backfist',
+      name: 'Spinning Backfist',
+      kind: 'heavy',
+      startup: 12,
+      active: 3,
+      recovery: 26,
+      hitboxes: [
+        sweep([13, 15], [0.55, 1.5, -0.1], [-0.45, 1.5, 0.7], 0.26, {
+          damage: 70,
+          hitstun: 30,
+          blockstun: 16,
+          hitstop: 12,
+          knockback: { fwd: 8, up: 4.5 },
+          wallBounce: true,
+          effect: 'heavy',
+        }, { limb: 'lHand' }),
+      ],
+    },
+    {
+      id: 'dash_straight',
+      name: 'Dash Straight',
+      kind: 'heavy',
+      startup: 16,
+      active: 4,
+      recovery: 24,
+      lunge: 0,
+      tracking: 6 * DEG,
+      motion: [{ frames: [5, 20], fwd: 10 }],
+      hitboxes: [
+        sweep([17, 20], [0.1, 1.45, 0.3], [0.05, 1.45, 1.05], 0.3, {
+          damage: 90,
+          hitstun: 28,
+          blockstun: 17,
+          hitstop: 13,
+          guardDamage: 40,
+          knockback: { fwd: 12, up: 2.5 },
+          wallSplat: true,
+          effect: 'heavy',
+        }, { limb: 'rHand' }),
+      ],
+    },
+    {
+      id: 'flying_knee',
+      name: 'Flying Knee',
+      kind: 'heavy',
+      startup: 10,
+      active: 6,
+      recovery: 22,
+      lunge: 0,
+      motion: [
+        { frames: [1, 2], fwd: 9 },
+        { frames: [3, 3], fwd: 9, up: 4 },
+        { frames: [4, 16], fwd: 9 },
+      ],
+      hitboxes: [
+        box([11, 16], [0.1, 1.2, 0.6], 0.3, {
+          damage: 75,
+          hitstun: 26,
+          blockstun: 16,
+          hitstop: 12,
+          knockback: { fwd: 9, up: 5 },
+          wallSplat: true,
+          effect: 'heavy',
+        }, { limb: 'rFoot' }),
+      ],
+    },
+
+    // ------------------------------------------------------------ specials
+    {
+      id: 'ki_blast',
+      name: 'Ki Blast',
+      kind: 'special',
+      startup: 13,
+      active: 2,
+      recovery: 20,
+      lunge: 0,
+      hitboxes: [],
+      projectiles: [
+        {
+          frame: 14,
+          offset: [0.1, 1.4, 0.6],
+          speed: 20,
+          radius: 0.28,
+          lifetime: 60,
+          hit: {
+            damage: 45,
+            hitstun: 20,
+            blockstun: 15,
+            hitstop: 6,
+            knockback: { fwd: 2.5, up: 0 },
+            airKnockback: { fwd: 2, up: 4 },
+            effect: 'energy',
+          },
+        },
+      ],
+    },
+    {
+      id: 'air_ki_blast',
+      name: 'Air Ki Blast',
+      kind: 'special',
+      air: true,
+      startup: 12,
+      active: 2,
+      recovery: 18,
+      lunge: 0,
+      gravityScale: 0.1,
+      landingLag: 8,
+      hitboxes: [],
+      projectiles: [
+        {
+          frame: 13,
+          offset: [0.1, 1.3, 0.6],
+          pitchOffset: -25,
+          speed: 20,
+          radius: 0.28,
+          lifetime: 50,
+          hit: {
+            damage: 40,
+            hitstun: 20,
+            blockstun: 14,
+            hitstop: 6,
+            knockback: { fwd: 2, up: 0 },
+            airKnockback: { fwd: 1.5, up: 3 },
+            effect: 'energy',
+          },
+        },
+      ],
+    },
+    {
+      id: 'shoulder_rush',
+      name: 'Shoulder Rush (armored)',
+      kind: 'special',
+      priority: 3,
+      startup: 12,
+      active: 10,
+      recovery: 20,
+      lunge: 0,
+      armor: { frames: [3, 22], hits: 1 },
+      motion: [{ frames: [8, 22], fwd: 12 }],
+      hitboxes: [
+        box([13, 22], [0, 1.2, 0.55], 0.45, {
+          damage: 80,
+          hitstun: 26,
+          blockstun: 18,
+          hitstop: 12,
+          guardDamage: 45,
+          knockback: { fwd: 11, up: 3 },
+          wallSplat: true,
+          effect: 'heavy',
+        }, { limb: 'body' }),
+      ],
+    },
+    {
+      id: 'rising_dragon',
+      name: 'Rising Dragon (invincible reversal)',
+      kind: 'special',
+      startup: 4,
+      active: 9,
+      recovery: 28,
+      lunge: 0.8,
+      invuln: [{ frames: [1, 9], kind: 'strike' }],
+      motion: [{ frames: [5, 12], fwd: 2, up: 10 }],
+      endHelpless: true,
+      landingLag: 16,
+      hitboxes: [
+        sweep([5, 7], [0.1, 1.0, 0.5], [0.1, 1.9, 0.5], 0.3, {
+          damage: 45,
+          hitstun: 30,
+          blockstun: 14,
+          hitstop: 8,
+          knockback: { fwd: 1, up: 11 },
+          launch: true,
+          effect: 'launch',
+        }, { group: 0, limb: 'rHand' }),
+        box([9, 13], [0.1, 2.1, 0.45], 0.32, {
+          damage: 55,
+          hitstun: 30,
+          blockstun: 14,
+          hitstop: 12,
+          knockback: { fwd: 3, up: 9 },
+          launch: true,
+          hardKnockdown: true,
+          effect: 'heavy',
+        }, { group: 1, limb: 'rHand' }),
+      ],
+    },
+
+    // ------------------------------------------------------------ super
+    {
+      id: 'barrage',
+      name: 'Hundred Fists (super)',
+      kind: 'super',
+      meterCost: 100,
+      startup: 8,
+      active: 32,
+      recovery: 24,
+      lunge: 4,
+      minScaling: 0.5,
+      invuln: [{ frames: [1, 12], kind: 'strike' }],
+      motion: [{ frames: [9, 34], fwd: 1.5 }],
+      hitboxes: [
+        barrageHit('lHand', 0, 9),
+        barrageHit('rHand', 1, 13),
+        barrageHit('lHand', 2, 17),
+        barrageHit('rHand', 3, 21),
+        barrageHit('lHand', 4, 25),
+        barrageHit('rHand', 5, 29),
+        sweep([36, 40], [0.1, 1.3, 0.3], [0.1, 1.6, 1.1], 0.35, {
+          damage: 160,
+          hitstun: 40,
+          blockstun: 20,
+          hitstop: 18,
+          knockback: { fwd: 14, up: 6 },
+          wallSplat: true,
+          hardKnockdown: true,
+          parryable: false,
+          effect: 'heavy',
+          minScaling: 0.5,
+        }, { group: 6, limb: 'rHand' }),
+      ],
+    },
+
+    // ------------------------------------------------------------ throw
+    {
+      id: 'grab',
+      name: 'Grab',
+      kind: 'throw',
+      startup: 6,
+      active: 3,
+      recovery: 26,
+      hitboxes: [box([7, 9], [0, 1.2, 0.55], 0.35, throwHit, { throw: true, limb: 'rHand' })],
+      throw: { hit: throwHit, recovery: 20 },
+    },
+
+    // ------------------------------------------------------------ aerials
+    // aL, aL, aL  — air jab, air kick, spin kick (knock away)
+    // aL, aL, aH  — ends with the axe kick spike (ground bounce)
+    {
+      id: 'air_jab',
+      name: 'Air Jab',
+      kind: 'light',
+      air: true,
+      startup: 5,
+      active: 3,
+      recovery: 12,
+      gravityScale: 0.15,
+      landingLag: 6,
+      hitboxes: [
+        sweep([6, 8], [-0.1, 1.4, 0.35], [-0.05, 1.35, 0.85], 0.22, {
+          damage: 26,
+          hitstun: 22,
+          blockstun: 12,
+          hitstop: 6,
+          knockback: { fwd: 1.5, up: 0 },
+          airKnockback: { fwd: 0.8, up: 4.8 },
+          attackerStall: 2.5,
+          effect: 'light',
+        }, { limb: 'lHand' }),
+      ],
+      cancels: [
+        { button: L, into: 'air_kick', frames: [9, 19], on: 'always' },
+        { button: H, into: 'axe_kick', frames: [9, 18], on: 'always' },
+      ],
+    },
+    {
+      id: 'air_kick',
+      name: 'Air Kick',
+      kind: 'light',
+      air: true,
+      startup: 6,
+      active: 3,
+      recovery: 13,
+      gravityScale: 0.15,
+      landingLag: 6,
+      hitboxes: [
+        sweep([7, 9], [0.2, 1.0, 0.3], [0.1, 1.3, 0.9], 0.24, {
+          damage: 30,
+          hitstun: 22,
+          blockstun: 12,
+          hitstop: 7,
+          knockback: { fwd: 2, up: 0 },
+          airKnockback: { fwd: 1, up: 4.8 },
+          attackerStall: 2.5,
+          effect: 'light',
+        }, { limb: 'rFoot' }),
+      ],
+      cancels: [
+        { button: L, into: 'air_spin', frames: [10, 21], on: 'always' },
+        { button: H, into: 'axe_kick', frames: [10, 20], on: 'always' },
+      ],
+    },
+    {
+      id: 'air_spin',
+      name: 'Air Spin Kick',
+      kind: 'light',
+      priority: 2,
+      air: true,
+      startup: 8,
+      active: 4,
+      recovery: 16,
+      gravityScale: 0.2,
+      landingLag: 8,
+      hitboxes: [
+        sweep([9, 12], [0.6, 1.1, 0.0], [-0.5, 1.2, 0.7], 0.26, {
+          damage: 40,
+          hitstun: 26,
+          blockstun: 14,
+          hitstop: 10,
+          knockback: { fwd: 8, up: 3 },
+          airKnockback: { fwd: 8, up: 3.5 },
+          attackerStall: 1,
+          wallSplat: true,
+          effect: 'heavy',
+        }, { limb: 'rFoot' }),
+      ],
+    },
+    {
+      id: 'axe_kick',
+      name: 'Axe Kick (spike)',
+      kind: 'heavy',
+      air: true,
+      startup: 11,
+      active: 5,
+      recovery: 18,
+      gravityScale: 0.3,
+      landingLag: 10,
+      hitboxes: [
+        sweep([12, 16], [0.1, 2.1, 0.5], [0.05, 0.5, 0.75], 0.28, {
+          damage: 70,
+          hitstun: 34,
+          blockstun: 18,
+          hitstop: 12,
+          knockback: { fwd: 1, up: -14 },
+          airKnockback: { fwd: 1.5, up: -16 },
+          groundBounce: true,
+          juggleCost: 2,
+          effect: 'spike',
+        }, { limb: 'rFoot' }),
+      ],
+    },
+  ]),
+};
