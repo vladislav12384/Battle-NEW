@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Battle — combat sandbox</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="ui"></div>
+    <div id="start" class="overlay">
+      <div class="card">
+        <h1>BATTLE <span>combat sandbox</span></h1>
+        <p class="lead">Тренировочный полигон боевой системы: физика, комбо, защита, выходы из комбо.</p>
+        <div class="cols">
+          <div>
+            <h3>Движение</h3>
+            <p><kbd>WASD</kbd> движение · <kbd>Мышь</kbd> обзор<br />
+            <kbd>Space</kbd> прыжок (двойной в воздухе)<br />
+            <kbd>Shift</kbd> рывок-уклонение (держать — бег)<br />
+            <kbd>Tab</kbd> / <kbd>СКМ</kbd> захват цели</p>
+            <h3>Атака</h3>
+            <p><kbd>ЛКМ</kbd> лёгкий удар · <kbd>ПКМ</kbd> тяжёлый (держать — заряд)<br />
+            <kbd>E</kbd> спецприём · <kbd>R</kbd> супер (100 метра)<br />
+            <kbd>Q</kbd> захват/бросок<br />
+            <kbd>W/S</kbd> + удар — направленные приёмы</p>
+          </div>
+          <div>
+            <h3>Защита</h3>
+            <p><kbd>F</kbd> держать — блок спереди<br />
+            <kbd>F</kbd> нажать в момент удара — <b>парирование</b><br />
+            <kbd>X</kbd> в комбо — <b>Burst</b> (брейкер)<br />
+            <kbd>Space/Shift</kbd> в воздухе после удара — тех<br />
+            <kbd>Q</kbd> когда схватили — разрыв броска</p>
+            <h3>Полигон</h3>
+            <p><kbd>1</kbd> хитбоксы · <kbd>2</kbd> режим манекена · <kbd>3</kbd> замедление<br />
+            <kbd>4</kbd> сброс · <kbd>5/6</kbd> + союзник/враг · <kbd>7</kbd> бесконечный метр<br />
+            <kbd>V</kbd> камера 1-е/3-е лицо · <kbd>H</kbd> список приёмов</p>
+          </div>
+        </div>
+        <button id="play">Кликни, чтобы начать</button>
+        <p class="hint">Esc — пауза. Геймпад тоже поддерживается.</p>
+      </div>
+    </div>
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>
