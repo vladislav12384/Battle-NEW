@@ -178,6 +178,42 @@ export interface ChargeDef {
   fullHit?: Partial<HitDef>;
 }
 
+/**
+ * A held beam (Cyclops' mega beam): it comes on at `frame` and the move holds
+ * there while `button` is held (at least `minFrames`, at most `maxFrames`).
+ * Every `every` frames it hits everyone along it, up to the first surface.
+ * It pushes the shooter back the other way: braced feet slide on the floor,
+ * in the air the push carries you (aim down to rise: controlled flight).
+ */
+export interface BeamDef {
+  frame: number;
+  button: number;
+  minFrames: number;
+  maxFrames: number;
+  /** Where it leaves from (local, like a projectile offset). */
+  offset: Vec3Tuple;
+  /** Reach (m) and radius of the beam. */
+  length: number;
+  radius: number;
+  every: number;
+  hit: HitDef;
+  /** Push opposite to the beam (m/s^2); `groundThrust` is the fraction felt with the feet on the floor. */
+  thrust: number;
+  groundThrust: number;
+  /**
+   * In the air: the fraction of the push felt sideways (flight stays
+   * steerable), and the share of the body's weight the beam holds up
+   * (aim down to climb, level to sink slowly, up to drop).
+   */
+  airRecoil: number;
+  lift: number;
+  /** Speed cap of the push (m/s) and the height above which it stops lifting you. */
+  maxSpeed: number;
+  ceiling: number;
+  /** How fast the beam follows the camera while it fires (rad/frame). */
+  turnRate: number;
+}
+
 export interface ThrowDef {
   hit: HitDef;
   /** Frames the thrower stays busy after the throw lands. */
@@ -273,6 +309,7 @@ export interface MoveDef {
   /** If the move ends airborne the fighter can't act until landing. */
   endHelpless?: boolean;
   charge?: ChargeDef;
+  beam?: BeamDef;
   throw?: ThrowDef;
   minScaling?: number;
 }

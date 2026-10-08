@@ -863,21 +863,23 @@ function opticCalc(c: Ctx): void {
  * air and the landing sinks into the knees. From inside: no spin (the camera
  * is yours), the leg whips across under the view.
  */
-function cyclone(c: Ctx): void {
+function cyclone(c: Ctx, air = false): void {
   const { p, g, b, side, A, B, tau } = c;
   const F = footOf(side);
   const S = footOf(-side);
-  // Hop (visual only: the simulation keeps the feet on the floor).
-  set(c, 'hipY', tr([[0, g.hipY], [0.45, g.hipY - 0.14], [0.65, g.hipY - 0.12], [1, g.hipY + 0.22, easeOut], [c.tauA, g.hipY + 0.3], [2, g.hipY + 0.32], [2.3, g.hipY + 0.12], [2.55, g.hipY - 0.12, easeIn], [3, g.hipY]], tau));
+  // Hop (visual only: the simulation keeps the feet on the floor). In the air: no hop, legs folded.
+  const hop = air ? 0 : 1;
+  set(c, 'hipY', tr([[0, g.hipY], [0.45, g.hipY - 0.14 * hop], [0.65, g.hipY - 0.12 * hop], [1, g.hipY + 0.22 * hop, easeOut], [c.tauA, g.hipY + 0.3 * hop], [2, g.hipY + 0.32 * hop], [2.3, g.hipY + 0.12 * hop], [2.55, g.hipY - 0.12 * hop, easeIn], [3, g.hipY]], tau));
   const tuck = v(-side * 0.1 * b.w, 0.42 * b.s, 0.08 * b.s);
-  p[S] = path([[0, g[S]], [0.6, add(g[S], v(0, 0, 0.02))], [1, v(-side * 0.12 * b.w, 0.22 * b.s, 0.06 * b.s)], [c.tauA, tuck], [2.2, tuck], [2.55, v(-side * 0.17 * b.w, 0, 0.14 * b.s), easeIn], [3, g[S]]], tau);
+  const rest = (foot: Foot): V3 => (air ? v(foot === 'lFoot' ? -0.14 * b.w : 0.15 * b.w, foot === 'lFoot' ? 0.38 * b.s : 0.5 * b.s, foot === 'lFoot' ? 0.14 * b.s : -0.04 * b.s) : g[foot]);
+  p[S] = path([[0, rest(S)], [0.6, add(rest(S), v(0, 0, 0.02))], [1, v(-side * 0.12 * b.w, (air ? 0.4 : 0.22) * b.s, 0.06 * b.s)], [c.tauA, tuck], [2.2, tuck], [2.55, air ? tuck : v(-side * 0.17 * b.w, 0, 0.14 * b.s), easeIn], [3, rest(S)]], tau);
   if (c.fp) {
     roundhouse(c);
-    set(c, 'hipY', tr([[0, g.hipY], [0.6, g.hipY - 0.1], [1, g.hipY + 0.12], [2, g.hipY + 0.16], [2.55, g.hipY - 0.08], [3, g.hipY]], tau));
+    if (!air) set(c, 'hipY', tr([[0, g.hipY], [0.6, g.hipY - 0.1], [1, g.hipY + 0.12], [2, g.hipY + 0.16], [2.55, g.hipY - 0.08], [3, g.hipY]], tau));
     return;
   }
   // The extended leg sits out to its own side; the spin carries it through the hitbox.
-  const out = v(side * 0.95 * b.w, 1.45 * b.s, 0.17 * b.s);
+  const out = v(side * 0.95 * b.w, ((A.y + B.y) / 2) * b.s, 0.17 * b.s);
   const aOut = Math.atan2(out.x, out.z);
   const pa = Math.atan2(A.x, A.z);
   const pb = Math.atan2(B.x, B.z);
@@ -894,7 +896,7 @@ function cyclone(c: Ctx): void {
   // Coil the other way, then the whirl starts with the take-off and gathers speed.
   p.spin = tr([[0, 0], [0.45, -dir * 0.4], [0.65, -dir * 0.3, lin], [1, sA * 0.45, easeIn], [c.tauA, sA, lin], [2, sB, lin], [2.6, end, easeOut], [3, end]], tau);
   const chamber = v(side * 0.3 * b.w, 0.95 * b.s, -0.06 * b.s);
-  p[F] = path([[0, g[F]], [0.6, add(g[F], v(0, 0.02, 0.04))], [1, chamber], [c.tauA - 0.12, chamber], [c.tauA, out, easeOut], [2, out], [2.3, v(side * 0.28 * b.w, 0.75 * b.s, 0)], [2.55, v(side * 0.18 * b.w, 0, -0.15 * b.s), easeIn], [3, g[F]]], tau);
+  p[F] = path([[0, rest(F)], [0.6, add(rest(F), v(0, 0.02, 0.04))], [1, chamber], [c.tauA - 0.12, chamber], [c.tauA, out, easeOut], [2, out], [2.3, v(side * 0.28 * b.w, 0.75 * b.s, 0)], [2.55, air ? v(side * 0.15 * b.w, 0.5 * b.s, -0.04 * b.s) : v(side * 0.18 * b.w, 0, -0.15 * b.s), easeIn], [3, rest(F)]], tau);
   set(c, kneeOf(side), tr([[0, 0], [1, 0.9], [c.tauA - 0.12, 0.9], [c.tauA, 0.15], [2, -0.85], [2.4, -0.4], [3, 0]], tau));
   set(c, kneeOf(-side), tr([[0, 0], [1, 0.3], [2.3, 0.3], [3, 0]], tau));
   set(c, 'hipTurn', tr([[0, 0], [1, -side * 0.1], [c.tauA, side * 0.6], [2, side * 1.05], [2.4, side * 0.4], [3, 0]], tau));
@@ -911,7 +913,7 @@ function cyclone(c: Ctx): void {
   p[O] = path([[0, g[O]], [0.6, v(-side * 0.32 * b.w, 1.05 * b.s, 0.05 * b.s)], [1, v(-side * 0.1 * b.w, 1.38 * b.s, 0.16 * b.s)], [c.tauA, v(-side * 0.1 * b.w, 1.38 * b.s, 0.16 * b.s)], [2, v(-side * 0.48 * b.w, 1.48 * b.s, 0.12 * b.s), easeOut], [2.5, v(-side * 0.3 * b.w, 1.42 * b.s, 0.2 * b.s)], [3, g[O]]], tau);
   set(c, elbowOf(side), tr([[0, 0], [1, -0.4], [2, 0.6], [3, 0]], tau));
   set(c, elbowOf(-side), tr([[0, 0], [1, -0.4], [2, 0.8], [3, 0]], tau));
-  set(c, heelOf(-side), tr([[0, g[heelOf(-side)]], [0.6, 0.6], [1, 1], [2.5, 0], [3, g[heelOf(-side)]]], tau));
+  if (!air) set(c, heelOf(-side), tr([[0, g[heelOf(-side)]], [0.6, 0.6], [1, 1], [2.5, 0], [3, g[heelOf(-side)]]], tau));
   c.stiff = tau < 0.6 ? 30 : tau < 2.55 ? 70 : 20;
 }
 
@@ -989,6 +991,122 @@ function geneSplice(c: Ctx): void {
   c.stiff = tau < 1 ? 30 : tau < 2.05 ? 90 : tau < 2.55 ? 34 : 22;
 }
 
+/**
+ * Mega beam. Wind-up: fingers of both hands on the visor, head down, the
+ * power gathers. Firing (the move holds while the button is held): on the
+ * floor a wide braced stance, leaning into the beam, the rear foot sliding;
+ * in the air the legs trail and the body tips with the push, the torso bends
+ * to look where the beam goes. The whole body shudders with the power. Then
+ * the hands come off the visor and the head shakes it off.
+ */
+function megaBeam(c: Ctx): void {
+  const { p, g, b, f, fp, tau } = c;
+  const firing = f.beaming;
+  const air = !f.grounded;
+  const t = c.time;
+  const tR = fp ? v(0.45 * b.w, 1.75 * b.s, -0.05 * b.s) : v(0.13 * b.w, 1.66 * b.s, 0.1 * b.s);
+  const tL = fp ? v(-0.45 * b.w, 1.75 * b.s, -0.05 * b.s) : v(-0.12 * b.w, 1.67 * b.s, 0.1 * b.s);
+  // Hands: to the visor during the wind-up, held there while it fires, down after.
+  const hold = tr([[0, 0], [0.5, 1], [2.25, 1], [2.75, 0]], tau);
+  const quake = firing ? Math.sin(t * 47) * 0.012 : 0;
+  p.rHand = add(lerpV(g.rHand, tR, hold), v(quake, quake * 0.6, 0));
+  p.lHand = add(lerpV(g.lHand, tL, hold), v(-quake, quake * 0.6, 0));
+  set(c, 'rElbow', 1.1 * hold);
+  set(c, 'lElbow', 1.1 * hold);
+  set(c, 'twist', g.twist * (1 - hold));
+  // Wind-up: head down, gathering; firing: head along the beam.
+  const aimLean = fp ? 0 : clamp(-f.aimPitch * 0.45, -0.3, 0.65);
+  const gather = tr([[0, 0], [0.6, 1], [1.7, 1], [2, 0]], tau);
+  // Local velocity: the push tips the body (pushed back = legs swing forward, chest back).
+  const sn = Math.sin(f.yaw);
+  const cs = Math.cos(f.yaw);
+  const vz = -sn * f.vel.x - cs * f.vel.z;
+  const vx = cs * f.vel.x - sn * f.vel.z;
+  const tipBack = firing && air ? clamp(-vz / 9, -1, 1) : 0;
+  const tipSide = firing && air ? clamp(vx / 9, -1, 1) : 0;
+  const lean = firing ? (air ? 0.05 + aimLean - tipBack * 0.25 : 0.24 + aimLean * 0.6) : tr([[0, g.lean], [0.6, 0.2], [1.8, 0.22], [2.2, -0.05], [2.75, 0.05], [3, g.lean]], tau);
+  set(c, 'lean', lean + (firing ? Math.sin(t * 31) * 0.015 : 0));
+  set(c, 'roll', firing ? -tipSide * 0.25 + Math.sin(t * 23) * 0.02 : 0);
+  set(c, 'headPitch', g.headPitch + 0.25 * gather * (fp ? 0.2 : 1) + (firing && !fp ? Math.sin(t * 53) * 0.02 : 0));
+  // After: a shake of the head, as if the light still burned.
+  set(c, 'headRoll', firing ? 0 : tr([[0, 0], [2.3, 0], [2.45, 0.14], [2.6, -0.12], [2.75, 0.06], [3, 0]], tau));
+  set(c, 'hipZ', firing && !air ? -0.05 : 0);
+  if (air) {
+    // Legs trail the push, knees bent, swinging with it.
+    const sw = tipBack * 0.25;
+    p.lFoot = v(-0.15 * b.w, (0.36 - sw * 0.2) * b.s, (-0.18 + sw) * b.s);
+    p.rFoot = v(0.16 * b.w, (0.48 - sw * 0.2) * b.s, (-0.32 + sw) * b.s);
+    set(c, 'lKnee', 0.2);
+    set(c, 'rKnee', -0.1);
+    set(c, 'hipY', g.hipY + 0.05);
+  } else {
+    // A wide braced stance: lead foot planted, rear foot driven back, heel up.
+    const brace = tr([[0, 0], [0.6, 0.5], [1.9, 0.6], [2, 1], [2.3, 1], [2.8, 0]], firing ? 2.1 : tau);
+    p.lFoot = lerpV(g.lFoot, v(-0.24 * b.w, 0, 0.32 * b.s), brace);
+    p.rFoot = lerpV(g.rFoot, v(0.26 * b.w, 0, -0.42 * b.s), brace);
+    set(c, 'rHeel', 0.7 * brace);
+    set(c, 'hipY', g.hipY - 0.12 * brace - 0.05 * gather);
+  }
+  set(c, 'glow', firing ? 0.5 + Math.sin(t * 29) * 0.1 : tr([[0, 0.2], [1.9, 0.6], [2.3, 0.35], [3, 0]], tau));
+  c.stiff = firing ? 40 : tau < 2 ? 30 : 18;
+}
+
+/**
+ * Flip hammer (air hammer): tuck into a forward somersault, open up out of it
+ * with both fists high and chop down through the target. From inside: no
+ * flip (the camera is yours), just the chop.
+ */
+function flipHammer(c: Ctx): void {
+  hammer(c);
+  if (c.fp) return;
+  const { p, b, tau } = c;
+  p.flip = tr([[0, 0], [0.1, 0], [1.2, Math.PI * 2, easeInOut], [3, Math.PI * 2]], tau);
+  const k = tr([[0, 0], [0.25, 1], [0.95, 1], [1.35, 0]], tau);
+  p.lFoot = lerpV(v(-0.12 * b.w, 0.3 * b.s, 0.12 * b.s), v(-0.12 * b.w, 0.78 * b.s, 0.32 * b.s), k);
+  p.rFoot = lerpV(v(0.12 * b.w, 0.42 * b.s, -0.08 * b.s), v(0.12 * b.w, 0.8 * b.s, 0.3 * b.s), k);
+  p.lHand = lerpV(p.lHand, v(-0.14 * b.w, 0.98 * b.s, 0.4 * b.s), k);
+  p.rHand = lerpV(p.rHand, v(0.14 * b.w, 0.98 * b.s, 0.4 * b.s), k);
+  p.lean += 0.55 * k;
+  p.headPitch += 0.5 * k;
+  p.hipY -= 0.08 * k * b.s;
+  set(c, 'lKnee', 0.3 * k);
+  set(c, 'rKnee', 0.3 * k);
+  c.stiff = tau < 1.35 ? 60 : (c.stiff ?? 40);
+}
+
+/** Aerial tornado (air spin kick): the cyclone, in the air, legs folded. */
+function airTornado(c: Ctx): void {
+  cyclone(c, true);
+}
+
+/**
+ * Meteor (dive kick): hang for a heartbeat, knees up, arms raised, eyes on
+ * the target; then the body becomes a spear: the kicking leg straight at the
+ * target, the other knee tucked, arms swept back like wings.
+ */
+function meteor(c: Ctx): void {
+  const { p, b, side, A, tau } = c;
+  const F = footOf(side);
+  const S = footOf(-side);
+  const spear = v(side * 0.04 * b.w, A.y - 0.08, A.z + 0.08);
+  const hangF = v(side * 0.12 * b.w, 0.72 * b.s, 0.24 * b.s);
+  const hangS = v(-side * 0.12 * b.w, 0.7 * b.s, 0.2 * b.s);
+  p[F] = path([[0, hangF], [0.9, hangF], [1.3, spear, easeOut], [2.6, spear], [3, hangF]], tau);
+  p[S] = path([[0, hangS], [0.9, hangS], [1.3, v(-side * 0.1 * b.w, 0.78 * b.s, 0.06 * b.s), easeOut], [3, v(-side * 0.1 * b.w, 0.7 * b.s, 0.06 * b.s)]], tau);
+  set(c, kneeOf(-side), 0.35);
+  const up = (sd: number): V3 => v(sd * 0.3 * b.w, 1.95 * b.s, 0.05 * b.s);
+  const wing = (sd: number): V3 => v(sd * 0.42 * b.w, 1.62 * b.s, -0.38 * b.s);
+  p.lHand = path([[0, up(-1)], [0.9, up(-1)], [1.3, wing(-1), easeOut], [2.6, wing(-1)], [3, up(-1)]], tau);
+  p.rHand = path([[0, up(1)], [0.9, up(1)], [1.3, wing(1), easeOut], [2.6, wing(1)], [3, up(1)]], tau);
+  set(c, 'lElbow', tr([[0, 0.8], [1.3, 0.2], [3, 0.2]], tau));
+  set(c, 'rElbow', tr([[0, 0.8], [1.3, 0.2], [3, 0.2]], tau));
+  set(c, 'lean', tr([[0, 0.15], [0.9, 0.2], [1.3, -0.42, easeOut], [2.6, -0.42], [3, -0.2]], tau));
+  set(c, 'headPitch', tr([[0, 0.35], [0.9, 0.4], [1.3, 0.55], [3, 0.5]], tau));
+  set(c, 'hipTurn', tr([[0, 0], [1.3, side * 0.15], [3, side * 0.15]], tau));
+  set(c, 'glow', tr([[0, 0.1], [0.9, 0.6], [1.3, 0.9], [2.4, 0.7], [3, 0.2]], tau));
+  c.stiff = tau < 0.9 ? 30 : tau < 1.4 ? 70 : 40;
+}
+
 // ===========================================================================
 // Dispatch
 
@@ -1022,6 +1140,10 @@ const STYLES: Record<string, Style> = {
   cyclone,
   pointBlank,
   geneSplice,
+  megaBeam,
+  flipHammer,
+  airTornado,
+  meteor,
 };
 
 /** Style of a move: its own `anim` hint, or one derived from the limb and the strike's trajectory. */

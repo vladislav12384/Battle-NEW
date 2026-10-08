@@ -21,7 +21,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 /** A beam longer than this detaches from the eyes and flies as a bolt. */
 const MAX_LEN = 9;
 const FADE = 0.16;
-const MAX_SCORCH = 32;
+const MAX_SCORCH = 64;
 
 const hdr = (r: number, g: number, b: number): THREE.Color => new THREE.Color().setRGB(r, g, b);
 interface Layer {
@@ -40,8 +40,14 @@ const SUPER_LAYERS: Layer[] = [
   { color: hdr(2.4, 0.55, 0.06), r: 0.095, opacity: 0.85 },
   { color: hdr(1, 0.16, 0.02), r: 0.27, opacity: 0.4 },
 ];
-export type BeamStyle = 'optic' | 'super';
-const STYLE: Record<BeamStyle, Layer[]> = { optic: LAYERS, super: SUPER_LAYERS };
+/** The held mega beam: a thick white-hot core in a wide ruby sheath. */
+const MEGA_LAYERS: Layer[] = [
+  { color: hdr(2.6, 1.6, 1.45), r: 0.05, opacity: 1 },
+  { color: hdr(1.9, 0.1, 0.04), r: 0.12, opacity: 0.75 },
+  { color: hdr(0.6, 0.02, 0.01), r: 0.28, opacity: 0.22 },
+];
+export type BeamStyle = 'optic' | 'super' | 'mega';
+const STYLE: Record<BeamStyle, Layer[]> = { optic: LAYERS, super: SUPER_LAYERS, mega: MEGA_LAYERS };
 
 /** Open tube, thin at the tail (y = -0.5), full width at the tip. */
 const tubeGeo = new THREE.CylinderGeometry(1, 0.3, 1, 18, 1, true);
@@ -148,6 +154,8 @@ interface Beam {
   fixed: boolean;
   /** Fighter whose eyes fired it (-1 = none). */
   owner: number;
+  /** A held stream: lit over its whole length, not just a bolt. */
+  stream: boolean;
 }
 
 interface Scorch {
@@ -268,6 +276,7 @@ export class OpticFx {
       fadeMax: FADE,
       fixed,
       owner: -1,
+      stream: false,
     };
   }
 
@@ -293,6 +302,42 @@ export class OpticFx {
     const b = this.makeBeam(origin, tip, width, false, style);
     b.owner = owner;
     this.beams.set(id, b);
+  }
+
+  /**
+   * A held beam from `origin` to `tip` this frame (keyed by its shooter).
+   * Call it every frame while it fires; `endStream` lets it burn out.
+   */
+  stream(key: string, owner: number, origin: THREE.Vector3, tip: THREE.Vector3, width: number): void {
+    let b = this.beams.get(key);
+    if (!b || b.fade !== null) {
+      if (b) this.dispose(b);
+      b = this.makeBeam(origin, tip, width, false, 'mega');
+      b.stream = true;
+      b.owner = owner;
+      this.beams.set(key, b);
+    }
+    b.origin.copy(origin);
+    b.tip.copy(tip);
+    b.width = width;
+  }
+
+  endStream(key: string): void {
+    const b = this.beams.get(key);
+    if (!b || b.fade !== null) return;
+    b.fixed = true;
+    b.fade = 0.22;
+    b.fadeMax = 0.22;
+  }
+
+  /** Held beams not in `live` burn out (their shooter stopped or is gone). */
+  pruneStreams(live: ReadonlySet<string>): void {
+    for (const [key, b] of this.beams) if (b.stream && b.fade === null && typeof key === 'string' && !live.has(key)) this.endStream(key);
+  }
+
+  hasStream(key: string): boolean {
+    const b = this.beams.get(key);
+    return !!b && b.fade === null;
   }
 
   /** A ricochet bounced at `at`: the beam bends there. */
@@ -625,7 +670,7 @@ export class OpticFx {
       const path = [b.origin, ...b.bends, b.tip];
       const full = polyLength(path);
       if (full < 1e-4) continue;
-      let len = Math.min(full, MAX_LEN * (b.style === 'super' ? 1.4 : 1));
+      let len = b.stream ? full : Math.min(full, MAX_LEN * (b.style === 'super' ? 1.4 : 1));
       // Burning out: the tail runs into the tip (static beams just thin out).
       if (b.fade !== null && !b.fixed) len *= k * k;
       const vis = tailOf(path, len);
@@ -660,6 +705,11 @@ export class OpticFx {
       if (b.fade === null || b.fixed) {
         const at = along(vis, Math.random() * len);
         this.fx.spark(at, { color: 0xff5a30, count: 1, speed: 1.2, size: 0.07, gravity: -1.5, life: 0.35 });
+        if (b.stream && Math.random() < 0.5 && len > 3) {
+          // Energy rippling down the held beam (not right at the eyes: it would fill a first-person view).
+          const d = b.tip.clone().sub(b.origin).normalize();
+          this.fx.shock(along(vis, 2.5 + Math.random() * (len - 2.5)), d, Math.random() < 0.5 ? 0xff5030 : 0xffc0b0, 0.4 + Math.random() * 0.35, 0.16, 0.45);
+        }
         if (b.style === 'super') {
           for (let n = 0; n < 2; n++) {
             const p = along(vis, Math.random() * len);

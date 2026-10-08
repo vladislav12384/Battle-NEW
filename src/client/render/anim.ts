@@ -118,6 +118,8 @@ export interface Pose {
   rHeel: number;
   /** Whole-body spin around the vertical axis (spinning strikes); not sprung. */
   spin: number;
+  /** Whole-body somersault around the hips (+ = forward flip); not sprung. */
+  flip: number;
   striking: LimbId[];
   /** Spring frequency per limb for this frame (snappy while striking). */
   stiff: Record<'lHand' | 'rHand' | 'lFoot' | 'rFoot' | 'body', number>;
@@ -214,6 +216,7 @@ function guardPose(b: Body): Pose {
     lHeel: 0,
     rHeel: 0.15,
     spin: 0,
+    flip: 0,
     striking: [],
     stiff: { lHand: IDLE, rHand: IDLE, lFoot: IDLE, rFoot: IDLE, body: 14 },
   };
@@ -568,11 +571,11 @@ function airFeet(p: Pose, f: FighterState, b: Body, move: MoveDef, feetUsed: boo
 }
 
 /** Styles that place the feet themselves (corkscrew, recoil flight, jumps). */
-const FEET_STYLES = new Set(['dragon', 'opticRecoil', 'cyclone', 'geneSplice', 'opticBank', 'opticCalc']);
+const FEET_STYLES = new Set(['dragon', 'opticRecoil', 'cyclone', 'geneSplice', 'opticBank', 'opticCalc', 'megaBeam', 'flipHammer', 'airTornado', 'meteor']);
 
 /** Strike poses: choreographed styles (strikes.ts), else limbs follow the hitboxes. */
 function attackPose(p: Pose, f: FighterState, stats: CharacterStats, b: Body, move: MoveDef, fr: number, firstPerson: boolean, time: number): void {
-  const frame = f.charging ? f.moveFrame : f.moveFrame + fr;
+  const frame = f.charging || f.beaming ? f.moveFrame : f.moveFrame + fr;
   if (strikePose(p, f, stats, b, move, frame, strikeLine(move), firstPerson, time)) {
     const feetUsed = move.hitboxes.some((h) => h.limb === 'lFoot' || h.limb === 'rFoot');
     // These styles place the feet themselves (corkscrew, recoil flight).
@@ -920,12 +923,14 @@ export function solveSkeleton(stats: CharacterStats, p: Pose): Joints {
     j.chestUp = turn(j.chestUp, 0, 0);
     j.chestRight = turn(j.chestRight, 0, 0);
   }
-  if (p.tiltPitch !== 0 || p.tiltRoll !== 0) {
-    const pivot = v(0, hipY, 0);
-    for (const k of POINT_KEYS) j[k] = rotateAround(j[k], pivot, p.tiltPitch, p.tiltRoll);
-    j.chestUp = rotateAround(j.chestUp, v(0, 0, 0), p.tiltPitch, p.tiltRoll);
-    j.chestRight = rotateAround(j.chestRight, v(0, 0, 0), p.tiltPitch, p.tiltRoll);
-    j.headRot = { ...j.headRot, pitch: j.headRot.pitch + p.tiltPitch, roll: j.headRot.roll + p.tiltRoll };
+  const tp = p.tiltPitch + p.flip;
+  if (tp !== 0 || p.tiltRoll !== 0) {
+    // A somersault turns around the middle of the body, a tumble around the hips.
+    const pivot = v(0, hipY + (p.flip !== 0 ? 0.15 * b.s : 0), 0);
+    for (const k of POINT_KEYS) j[k] = rotateAround(j[k], pivot, tp, p.tiltRoll);
+    j.chestUp = rotateAround(j.chestUp, v(0, 0, 0), tp, p.tiltRoll);
+    j.chestRight = rotateAround(j.chestRight, v(0, 0, 0), tp, p.tiltRoll);
+    j.headRot = { ...j.headRot, pitch: j.headRot.pitch + tp, roll: j.headRot.roll + p.tiltRoll };
   }
   return j;
 }

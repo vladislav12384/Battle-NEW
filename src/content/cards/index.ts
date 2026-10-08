@@ -7,7 +7,7 @@
  * simulation needs no notion of cards at all.
  */
 import type { CharacterDef, CommandDef, MoveDef } from '../../core/types';
-import { opticBlast, ricochet } from './cyclops';
+import { megaBeam, opticBlast, ricochet } from './cyclops';
 
 export type CardRarity = 'common' | 'rare' | 'legendary';
 
@@ -30,12 +30,18 @@ export interface CardDef {
   swap?: Record<string, string>;
   /** Extra commands, checked before the character's own (first match wins). */
   commands?: CommandDef[];
+  /**
+   * Base moves the card only re-animates: same move, same frame data and
+   * hitboxes, a new choreography (`anim`) and effects (`vfx`).
+   */
+  restyle?: Record<string, Pick<MoveDef, 'anim' | 'vfx'>>;
 }
 
 /** Every card, in a fixed order (character ids list cards in this order). */
 export const CARDS: Readonly<Record<string, CardDef>> = {
   [opticBlast.id]: opticBlast,
   [ricochet.id]: ricochet,
+  [megaBeam.id]: megaBeam,
 };
 
 /** Card ids in the canonical order of CARDS. */
@@ -54,6 +60,10 @@ export function withCards(base: CharacterDef, cards: readonly CardDef[]): Charac
     for (const m of card.moves) {
       if (moves[m.id]) throw new Error(`Card ${card.id}: move id ${m.id} already exists`);
       moves[m.id] = m;
+    }
+    for (const [id, style] of Object.entries(card.restyle ?? {})) {
+      if (!moves[id]) throw new Error(`Card ${card.id}: restyle of missing move ${id}`);
+      moves[id] = { ...moves[id], ...style };
     }
     Object.assign(swap, card.swap);
     extra.push(...(card.commands ?? []));
@@ -77,4 +87,4 @@ export function cardCharacters(base: CharacterDef): Record<string, CharacterDef>
   return out;
 }
 
-export { opticBlast, ricochet };
+export { megaBeam, opticBlast, ricochet };

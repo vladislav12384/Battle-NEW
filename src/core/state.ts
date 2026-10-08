@@ -112,6 +112,9 @@ export interface FighterState {
   /** Left exposed by a perfect dodge: acts at half speed while > 0. */
   exposed: number;
   lungeLeft: number;
+  /** A held beam is firing (the move holds on its beam frame), for this many frames so far. */
+  beaming: boolean;
+  beamFrames: number;
   /** Auto-aimed move (ricochet super): the body turns to this launch direction. */
   autoAim: boolean;
   autoYaw: number;

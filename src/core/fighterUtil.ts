@@ -74,6 +74,8 @@ export function createFighterState(
     stringPos: 0,
     exposed: 0,
     lungeLeft: 0,
+    beaming: false,
+    beamFrames: 0,
     autoAim: false,
     autoYaw: 0,
     autoPitch: 0,
@@ -141,6 +143,8 @@ export function enterState(f: FighterState, s: StateId, stun = 0): void {
     f.rhythm = 0;
     f.stringPos = 0;
     f.autoAim = false;
+    f.beaming = false;
+    f.beamFrames = 0;
   }
   if (s !== 'ground') f.running = false;
 }

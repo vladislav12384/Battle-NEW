@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { CARDS, cardCharId, CHARACTERS, sortCards } from '../content';
 import { Bot, type BotLevel, type BotMode } from '../core/ai/bot';
+import { beamSegment, firingBeam } from '../core/beam';
 import { chargeRatio } from '../core/combat';
 import { autoAimPlan } from '../core/fighter';
 import { type InputFrame } from '../core/input';
@@ -71,6 +72,10 @@ interface ViewEntry {
   opticDone: boolean;
   /** One-shot effects already played for the current move (keyed by name). */
   moveFx: { move: string | null; frame: number; done: Set<string> };
+  /** Was firing a held beam last tick (start / end of the mega beam). */
+  beaming: boolean;
+  /** Effects hint of the move it was doing last tick (a meteor dive that just landed). */
+  prevVfx: string | null;
   /** Airborne last tick (landing of a recoil). */
   wasAir: boolean;
 }
@@ -115,11 +120,11 @@ export interface GameOptions {
 }
 
 /** Moves that blast from the visor (it charges up before they fire). */
-const OPTIC_VFX = new Set(['optic', 'opticFloor', 'ricochet', 'ricochetSuper', 'opticPoint']);
+const OPTIC_VFX = new Set(['optic', 'opticFloor', 'ricochet', 'ricochetSuper', 'opticPoint', 'megaBeam']);
 /** Moves whose projectile is an eye beam, and how it is drawn. */
 const BEAM_STYLE: Record<string, BeamStyle> = { optic: 'optic', ricochet: 'optic', ricochetSuper: 'super' };
 /** Cyclops' strikes wrapped in ruby energy (trail color). */
-const RUBY_VFX = new Set(['cyclone', 'geneSplice', 'opticPoint']);
+const RUBY_VFX = new Set(['cyclone', 'geneSplice', 'opticPoint', 'megaBeam', 'airTornado', 'flipHammer', 'meteor']);
 const RUBY = 0xff4a2a;
 const FIRE_COLORS = [0xffe08a, 0xffb040, 0xff7a20, 0xff4a10];
 /** Whether a move is one of Cyclops' eye blasts (charges the visor). */
@@ -486,6 +491,8 @@ export class Game {
           color,
           opticDone: false,
           moveFx: { move: null, frame: 0, done: new Set() },
+          beaming: false,
+          prevVfx: null,
           wasAir: !f.grounded,
         };
         e.mem.lastX = f.pos.x;
@@ -704,6 +711,17 @@ export class Game {
       const e = this.views.get(f.id);
       if (!e) continue;
       if (f.burn > 0 && f.state !== 'ko') this.flames(f);
+      // Mega beam: start, every tick of it, end.
+      const bm = firingBeam(this.sim, f);
+      if (bm?.beam) this.megaTick(f, e, bm.beam);
+      else if (e.beaming) {
+        this.audio.play('megaEnd', this.nearCamera(f.pos) * 1.1);
+        this.optic.endStream(`m${f.id}`);
+      }
+      e.beaming = !!bm;
+      // Meteor: the dive just hit the floor.
+      if (e.prevVfx === 'meteor' && f.state === 'land') this.crater(f);
+      e.prevVfx = f.state === 'attack' ? (this.sim.moveOf(f)?.vfx ?? null) : null;
       const m = f.state === 'attack' ? this.sim.moveOf(f) : null;
       if (!m?.vfx || !RUBY_VFX.has(m.vfx)) continue;
       const me = f.id === this.playerId;
@@ -725,6 +743,16 @@ export class Game {
           this.audio.play('land', this.nearCamera(f.pos));
         }
         if (fp && f.moveFrame >= release && f.moveFrame < hit) this.kick.roll -= 0.012;
+      } else if (m.vfx === 'meteor') {
+        // The dive: afterimages and embers stream off the body.
+        if (!f.grounded && f.moveFrame > m.startup - 2) {
+          if (!fp && f.moveFrame % 2 === 0) this.spawnGhost(e, RUBY, 0.26, 0.22);
+          const foot = e.joints ? e.view.root.localToWorld(toThree(e.joints.rFoot)) : feet;
+          fx.spark(foot, { color: f.moveFrame % 2 ? 0xff7a40 : 0xffd0a0, count: 2, speed: 1.2, size: 0.1, gravity: -1, life: 0.35 });
+          if (f.moveFrame === m.startup && this.once(e, f, 'dive')) this.audio.play('cyclone', this.nearCamera(f.pos) * 1.2);
+        }
+      } else if (m.vfx === 'airTornado') {
+        if (this.once(e, f, 'whirl')) this.audio.play('cyclone', this.nearCamera(f.pos));
       } else if (m.vfx === 'opticPoint') {
         if (f.moveFrame >= hit && this.once(e, f, 'blast')) this.pointBlankFx(f, fwd, fp);
       } else if (m.vfx === 'geneSplice') {
@@ -746,6 +774,89 @@ export class Game {
         }
       }
     }
+  }
+
+  /**
+   * One tick of a held mega beam: the beam melts the surface it hits (sparks,
+   * glare, a scorched trail as it sweeps), hums, pushes its shooter (afterimages
+   * in flight, dust under braced feet) and shakes our own view.
+   */
+  private megaTick(f: FighterState, e: ViewEntry, b: NonNullable<MoveDef['beam']>): void {
+    const fx = this.fx;
+    const me = f.id === this.playerId;
+    const fp = me && !this.settings.thirdPerson;
+    const seg = beamSegment(this.sim, f, b);
+    const at = this.worldPoint(seg.to);
+    const frame = this.sim.state.frame;
+    if (!e.beaming) {
+      // It comes on: a blast at the eyes.
+      const eyes = this.eyesOf(f);
+      this.audio.play('megaStart', this.nearCamera(f.pos) * 1.2);
+      if (!fp) {
+        fx.flash(eyes, 0xff5030, 1.8, 0.14);
+        fx.ring(eyes, 0xffb0a0, 1.6, 0.2);
+      }
+      if (me) {
+        this.hud.flash('rgba(255,80,50,1)', 0.12);
+        this.kick.pitch += 0.04;
+        this.fx.shake(0.3);
+      }
+    }
+    if (seg.surface) {
+      const n = this.worldPoint(seg.surface.normal);
+      const out = new THREE.Vector3(seg.dir.x, seg.dir.y, seg.dir.z).reflect(n).add(n).normalize();
+      fx.spark(at, { color: frame % 2 ? 0xff7a48 : 0xffd2b0, count: 5, speed: 7, size: 0.08, gravity: 8, life: 0.4, dir: out, spread: 0.7 });
+      if (frame % 2 === 0) fx.flash(at.clone().addScaledVector(n, 0.05), 0xff5a30, 1.6, 0.09);
+      if (frame % 4 === 0) this.optic.scorch(at.clone().addScaledVector(n, 0.004), n, 1.05);
+      if (frame % 3 === 0) fx.spark(at, { color: 0x9a8f86, count: 1, speed: 1.5, size: 0.3, gravity: -1.2, life: 0.8, dir: n, spread: 0.5 });
+    }
+    if (frame % 6 === 0) this.audio.play('beamHum', this.nearCamera(f.pos));
+    const speed = Math.hypot(f.vel.x, f.vel.z);
+    if (!f.grounded) {
+      if (!fp && frame % 5 === 0) this.spawnGhost(e, RUBY, 0.2, 0.25);
+    } else if (speed > 0.3 && frame % 2 === 0) {
+      const feet = new THREE.Vector3(f.pos.x, 0.05, f.pos.z);
+      fx.spark(feet, { color: 0xa09484, count: 2, speed: 1.6, size: 0.18, gravity: 2, life: 0.5, dir: new THREE.Vector3(f.vel.x / speed, 0.5, f.vel.z / speed), spread: 0.6 });
+    }
+    if (me) {
+      this.visorFlash = Math.max(this.visorFlash, 0.65);
+      this.fx.shake(0.03);
+      this.kick.fov = Math.max(this.kick.fov, f.grounded ? 3 : 7);
+    }
+  }
+
+  /** The meteor dive hits the floor: a crater ring, debris, a scorched blot. */
+  private crater(f: FighterState): void {
+    const fx = this.fx;
+    const at = new THREE.Vector3(f.pos.x, 0.05, f.pos.z);
+    const up = new THREE.Vector3(0, 1, 0);
+    fx.shock(at, up, 0xffffff, 3.4, 0.38, 0.8);
+    fx.shock(at.clone().setY(0.08), up, RUBY, 2.4, 0.3, 0.9);
+    fx.flash(at.clone().setY(0.3), 0xff5a30, 2.4, 0.16);
+    fx.spark(at, { color: 0xa09484, count: 40, speed: 6, size: 0.22, gravity: 9, life: 0.8, dir: up, spread: 1.1 });
+    fx.spark(at, { color: 0xff7a48, count: 20, speed: 8, size: 0.08, gravity: 9, life: 0.5, dir: up, spread: 0.9 });
+    this.optic.scorch(at.clone().setY(0.012), up, 1.9);
+    this.audio.play('meteor', this.nearCamera(f.pos) * 1.2);
+    if (hDistance(f.pos, this.world.camera.position) < 9) fx.shake(f.id === this.playerId ? 0.4 : 0.2);
+  }
+
+  /** A pulse of the mega beam lands: light effects (it comes many times a second). */
+  private beamHitFx(e: Extract<GameEvent, { type: 'hit' }>): void {
+    const at = this.worldPoint(e.point);
+    const kdir = new THREE.Vector3(e.dir.x, e.dir.y, e.dir.z);
+    this.fx.spark(at, { color: 0xff7a48, count: 10, speed: 6, size: 0.08, gravity: 6, life: 0.35, dir: kdir, spread: 0.8 });
+    this.fx.flash(at, 0xff4a2a, 0.9, 0.08);
+    this.views.get(e.victim)?.view.hitFlash(1.1, 0xff6040);
+    this.reactToHit(e.victim, e.attacker, e.dir, e.point, 0.5);
+    this.audio.play('sizzle', this.nearCamera(at) * 0.7);
+    const ally = this.sim.fighter(e.attacker)?.team === 0;
+    if (e.damage > 0) this.hud.damageNumber(e.point, e.damage, e.victim === this.playerId ? 'taken' : ally ? 'dealt' : 'taken');
+    if (ally) this.hud.showCombo(e.comboHits, e.comboDamage, e.trueCombo);
+    if (e.victim === this.playerId) {
+      this.hud.hurt(e.damage);
+      this.fx.shake(0.15);
+    }
+    if (e.attacker === this.playerId) this.lastTarget = e.victim;
   }
 
   /** The point-blank optic discharges: a fat, short beam into the face and a cone of blast waves. */
@@ -832,6 +943,11 @@ export class Game {
     const sfx = this.audio;
     switch (e.type) {
       case 'hit': {
+        const beamer = this.sim.fighter(e.attacker);
+        if (beamer && e.move && this.sim.moveById(beamer.charId, e.move)?.vfx === 'megaBeam') {
+          this.beamHitFx(e);
+          break;
+        }
         const at = this.worldPoint(e.point);
         const heavy = e.effect === 'heavy' || e.effect === 'launch' || e.effect === 'spike' || e.effect === 'throw' || e.damage >= 60;
         const attacker = this.sim.fighter(e.attacker);
@@ -1388,6 +1504,21 @@ export class Game {
     this.cameraOverride?.(this.world.camera, this);
     this.trackBeams(frac);
     this.optic.aimPreview(me ? this.bankPreview(me) : null);
+    // Held mega beams: from the eyes to whatever stops them.
+    const streams = new Set<string>();
+    for (const f of sim.state.fighters) {
+      const bm = firingBeam(sim, f);
+      if (!bm?.beam) continue;
+      const seg = beamSegment(sim, f, bm.beam);
+      const fpMe = f.id === this.playerId && firstPerson;
+      const tip = this.worldPoint(seg.to);
+      const origin = this.eyesOf(f);
+      // From our own eyes it starts a little ahead and thinner, so the target stays in sight.
+      if (fpMe) origin.lerp(tip, Math.min(0.5, 0.9 / Math.max(origin.distanceTo(tip), 1e-3)));
+      streams.add(`m${f.id}`);
+      this.optic.stream(`m${f.id}`, f.id, origin, tip, fpMe ? 0.8 : 1.6);
+    }
+    this.optic.pruneStreams(streams);
     this.optic.update(dt, this.world.camera.position);
     this.hud.burning(me && me.burn > 0 && me.state !== 'ko' ? 0.5 + 0.25 * Math.sin(this.time * 17) : 0);
     // Ricochet super ready: a reticle on whoever the visor would hit.

@@ -27,9 +27,20 @@ const ART: Record<string, string> = {
     <div class="tc-leg l3"></div>
     <div class="tc-spark s1"></div>
     <div class="tc-spark s2"></div>`,
+  mega_beam: `
+    <div class="tc-floor"></div>
+    <div class="tc-glowfloor"></div>
+    <div class="tc-flyer">
+      <div class="tc-fhead"><i></i></div>
+      <div class="tc-fbody"></div>
+    </div>
+    <div class="tc-mega"></div>
+    <div class="tc-thrust t1"></div>
+    <div class="tc-thrust t2"></div>
+    <div class="tc-thrust t3"></div>`,
 };
 /** Extra class of the art frame by card id (its own background). */
-const ART_CLASS: Record<string, string> = { ricochet: 'rico' };
+const ART_CLASS: Record<string, string> = { ricochet: 'rico', mega_beam: 'mega' };
 
 /** Inline style carrying the card's colors. */
 export const cardStyle = (card: CardDef): string =>

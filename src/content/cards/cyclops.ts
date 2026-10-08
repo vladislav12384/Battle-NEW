@@ -20,6 +20,15 @@
  *                   it takes. The hit sets it on fire. No path: the point is
  *                   kept and the plain ricochet comes out instead.
  *   RMB string      Cyclone (2nd), Point-Blank Optic (3rd), Gene Splice (4th).
+ *
+ * Mega Beam:
+ *   E with a super point  instead of the Hundred Fists: a beam that keeps
+ *                   firing while E is held (up to 2.5 s), swept with the view,
+ *                   hitting everyone along it in pulses. It pushes back: on the
+ *                   floor the feet slide, in the air it carries you (aim down at
+ *                   someone and you rise: controlled flight, the stick steers).
+ *   New animations  air spin kick (aerial tornado), air hammer (front-flip
+ *                   smash), dive kick (meteor): same moves, new choreography.
  */
 import { Button } from '../../core/input';
 import { DEG } from '../../core/math/vec3';
@@ -321,4 +330,78 @@ export const ricochet: CardDef = {
     { move: 'ricochet_super', button: E, dir: 'forward' },
     { move: 'ricochet', button: E, dir: 'forward' },
   ],
+};
+
+// ===========================================================================
+// Mega Beam
+
+const megaBeamMove: MoveDef = {
+  id: 'mega_beam',
+  name: 'Mega Optic Beam (super)',
+  kind: 'super',
+  meterCost: 100,
+  anim: 'megaBeam',
+  vfx: 'megaBeam',
+  startup: 16,
+  active: 2,
+  recovery: 26,
+  lunge: 0,
+  mobility: 0,
+  turnRate: 9 * DEG,
+  landingLag: 10,
+  invuln: [{ frames: [1, 10], kind: 'strike' }],
+  hitboxes: [],
+  beam: {
+    frame: 17,
+    button: E,
+    minFrames: 30,
+    maxFrames: 150,
+    offset: [0, 1.6, 0.25],
+    length: 28,
+    radius: 0.32,
+    every: 8,
+    hit: {
+      damage: 20,
+      chip: 2,
+      guardDamage: 9,
+      hitstun: 14,
+      blockstun: 12,
+      hitstop: 3,
+      knockback: { fwd: 2.6, up: 0 },
+      airKnockback: { fwd: 2, up: 3.4 },
+      parryable: false,
+      effect: 'energy',
+      minScaling: 0.5,
+    },
+    thrust: 30,
+    groundThrust: 0.4,
+    airRecoil: 0.45,
+    lift: 0.7,
+    maxSpeed: 9,
+    ceiling: 6.5,
+    turnRate: 3.2 * DEG,
+  },
+};
+
+export const megaBeam: CardDef = {
+  id: 'mega_beam',
+  name: 'Мега-луч',
+  hero: 'Циклоп',
+  rarity: 'rare',
+  color: 0x3b82f6,
+  lines: [
+    'Очко супера — держи <kbd>E</kbd>: вместо «Ста кулаков» сплошной луч до 2.5 с, ведёшь его взглядом, бьёт всех на линии',
+    'Луч толкает назад. В прыжке стреляй вниз по врагу — и лети: управляемый полёт, <kbd>WASD</kbd> рулит',
+    'Новые анимации в воздухе: вертушка, молот вниз, удар в пике',
+  ],
+  hint: 'держи <kbd>E</kbd> с очком супера — луч и полёт',
+  flavor: 'Отдача — тоже оружие.',
+  moves: [megaBeamMove],
+  swap: { barrage: 'mega_beam' },
+  commands: [{ move: 'mega_beam', button: E, air: true }],
+  restyle: {
+    air_spin: { anim: 'airTornado', vfx: 'airTornado' },
+    air_hammer: { anim: 'flipHammer', vfx: 'flipHammer' },
+    dive_kick: { anim: 'meteor', vfx: 'meteor' },
+  },
 };

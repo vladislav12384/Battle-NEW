@@ -8,6 +8,7 @@
  *     hit stop ends; it acts on tick N+1.
  *   - Hit stop freezes logic and physics but inputs keep buffering.
  */
+import { BEAM_MAX_PITCH } from './beam';
 import { pinVictim, resolveHit, throwTech } from './combat';
 import { enterState, releaseGrab, spendStamina } from './fighterUtil';
 import {
@@ -43,7 +44,7 @@ import { flightRange, planShot, type ProjectileHost, spawnProjectile } from './p
 import type { RicochetPlan } from './ricochet';
 import { DT, RULES } from './rules';
 import type { FighterState } from './state';
-import type { CommandDef, HitDef, MoveDef } from './types';
+import type { BeamDef, CommandDef, HitDef, MoveDef } from './types';
 
 /** What the state machine needs from the simulation. */
 export interface FighterHost extends ProjectileHost {
@@ -860,6 +861,17 @@ function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void
   if (f.stringPos === 1 && f.moveFrame <= 4 && m.kind !== 'throw' && buffered(f.input, Button.GRAB, 4)) {
     if (tryCommand(sim, f, input, (n) => n.kind === 'throw')) return;
   }
+  // A held beam: the move holds on its beam frame while the button is held.
+  if (f.beaming && m.beam) {
+    const b = m.beam;
+    if ((isHeld(f.input, b.button) || f.beamFrames < b.minFrames) && f.beamFrames < b.maxFrames) {
+      f.beamFrames++;
+      aimBeam(sim, f, b, input);
+      beamThrust(sim, f, b, input);
+      return;
+    }
+    f.beaming = false;
+  }
   if (f.charging) {
     const c = m.charge!;
     if (isHeld(f.input, c.button) && f.chargeFrames < c.maxFrames) {
@@ -1072,6 +1084,61 @@ function applyMoveFrame(sim: FighterHost, f: FighterState, m: MoveDef, input: In
   });
 
   if (m.charge && fr === m.charge.frame && isHeld(f.input, m.charge.button)) f.charging = true;
+  if (m.beam && fr === m.beam.frame) {
+    f.beaming = true;
+    f.beamFrames = 0;
+  }
+}
+
+/** The beam follows where the player looks, slowly (it has to be swept, not snapped). */
+function aimBeam(sim: FighterHost, f: FighterState, b: BeamDef, input: InputFrame): void {
+  const look = lookTarget(sim, f, input);
+  f.yaw = approachAngle(f.yaw, look.yaw, b.turnRate);
+  f.aimPitch = approach(f.aimPitch, clamp(look.pitch, -BEAM_MAX_PITCH, BEAM_MAX_PITCH), b.turnRate);
+}
+
+/**
+ * The beam pushes back the way it came. Feet on the floor brace against it
+ * and slide; in the air the push carries the body: aim down to rise, aim
+ * down and back to fly forward, the stick steers. A soft ceiling and a speed
+ * cap keep the flight in the arena.
+ */
+function beamThrust(sim: FighterHost, f: FighterState, b: BeamDef, input: InputFrame): void {
+  const stats = sim.statsOf(f);
+  const pitch = clamp(f.aimPitch, -BEAM_MAX_PITCH, BEAM_MAX_PITCH);
+  const c = Math.cos(pitch);
+  const dx = -Math.sin(f.yaw) * c;
+  const dy = Math.sin(pitch);
+  const dz = -Math.cos(f.yaw) * c;
+  const k = f.grounded ? b.groundThrust : b.airRecoil;
+  let ax = -dx * b.thrust * k;
+  let az = -dz * b.thrust * k;
+  let ay = -dy * b.thrust + (f.grounded ? 0 : b.lift * stats.gravity);
+  if (ay > 0 && f.pos.y > b.ceiling) ay *= Math.max(0, 1 - (f.pos.y - b.ceiling));
+  if (f.grounded) {
+    // Braced feet: it only takes off when the push beats gravity.
+    if (ay <= stats.gravity) ay = 0;
+  } else {
+    const w = wishDir(f, input);
+    ax += w.x * stats.airAccel * 1.3;
+    az += w.z * stats.airAccel * 1.3;
+  }
+  f.vel.x += ax * DT;
+  f.vel.z += az * DT;
+  if (ay !== 0) {
+    f.vel.y += ay * DT;
+    if (f.vel.y > 0) f.grounded = false;
+  }
+  if (f.grounded) applyFriction(f, 8);
+  const cap = f.grounded ? b.maxSpeed * 0.15 : b.maxSpeed;
+  const h = Math.hypot(f.vel.x, f.vel.z);
+  if (h > cap) {
+    f.vel.x *= cap / h;
+    f.vel.z *= cap / h;
+  }
+  f.vel.y = clamp(f.vel.y, -stats.maxFallSpeed, b.maxSpeed * 0.7);
+  // Over the ceiling the climb dies out (the walls are not much higher).
+  if (f.pos.y > b.ceiling && f.vel.y > 0) f.vel.y *= 0.8;
 }
 
 /**

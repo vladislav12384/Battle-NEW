@@ -38,7 +38,11 @@ export type Sfx =
   | 'burn'
   | 'pointBlank'
   | 'geneSplice'
-  | 'cyclone';
+  | 'cyclone'
+  | 'megaStart'
+  | 'beamHum'
+  | 'megaEnd'
+  | 'meteor';
 
 export class Audio {
   private ctx: AudioContext | null = null;
@@ -297,6 +301,30 @@ export class Audio {
         this.hiss('bandpass', 500, 1, 0.22 * k, 0.32, 3600);
         this.tone('sawtooth', 220, 1300, 0.08 * k, 0.28);
         this.tone('sine', 880, 2600, 0.06 * k, 0.3, 0.05);
+        break;
+      case 'megaStart':
+        // The held beam comes on: a deep crack and a roar that keeps going.
+        this.tone('sawtooth', 1800, 140, 0.2 * k, 0.35);
+        this.tone('sine', 70, 30, 0.9 * k, 0.6);
+        this.hiss('lowpass', 2600, 0.6, 0.5 * k, 0.5, 400);
+        this.hiss('highpass', 4000, 0.5, 0.2 * k, 0.15, 9000);
+        break;
+      case 'beamHum':
+        // Sustained beam: a buzzing, crackling hum (retriggered every few ticks).
+        this.tone('sawtooth', 110 + Math.random() * 6, 104, 0.07 * k, 0.12);
+        this.tone('square', 220 + Math.random() * 10, 210, 0.025 * k, 0.1);
+        this.hiss('bandpass', 1400 + Math.random() * 600, 1.2, 0.08 * k, 0.11);
+        break;
+      case 'megaEnd':
+        // It sputters out.
+        this.tone('sawtooth', 300, 60, 0.1 * k, 0.3);
+        this.hiss('lowpass', 1600, 0.6, 0.18 * k, 0.35, 200);
+        break;
+      case 'meteor':
+        // A dive into the floor: a crash and rubble.
+        this.tone('sine', 60, 24, 1 * k, 0.55);
+        this.hiss('lowpass', 3000, 0.5, 0.6 * k, 0.5, 160);
+        this.hiss('bandpass', 900, 0.9, 0.3 * k, 0.4, 300);
         break;
       case 'cyclone':
         // A whirl: two fast passes of air.

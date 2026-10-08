@@ -1570,3 +1570,154 @@ kbd {
     opacity: 0;
   }
 }
+
+/* ---------------------------------------------------------------- Mega Beam card */
+.tc-mini.mega_beam i {
+  left: 13px;
+  right: 13px;
+  top: 8px;
+  height: 32px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #ffe7de, #ff3b30 60%, rgba(255, 59, 48, 0.2));
+  box-shadow: 0 0 8px #ff3b30;
+}
+
+/* Art: Cyclops hangs in the air on his own beam, fired down into the floor. */
+.tc-art.mega {
+  background:
+    radial-gradient(circle at 50% 100%, rgba(255, 80, 40, 0.35), transparent 55%),
+    linear-gradient(180deg, #0d1426, #07070b);
+}
+.tc-floor {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 16px;
+  background: repeating-linear-gradient(90deg, #262b3b 0 22px, #1d2130 22px 24px);
+}
+.tc-glowfloor {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 120px;
+  height: 22px;
+  margin-left: -60px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, #fff 0%, #ffb09a 18%, rgba(255, 59, 48, 0.75) 40%, transparent 70%);
+  animation: tcglow 1.2s ease-in-out infinite;
+}
+.tc-flyer {
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  width: 34px;
+  height: 56px;
+  margin-left: -17px;
+  animation: tcfly 2.6s ease-in-out infinite;
+}
+.tc-fhead {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #3b4466, #151a2c 75%);
+}
+.tc-fhead i {
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  bottom: 3px;
+  height: 5px;
+  border-radius: 3px;
+  background: #ffd8cc;
+  box-shadow: 0 0 8px #ff3b30, 0 0 18px #ff2a10;
+}
+.tc-fbody {
+  position: absolute;
+  left: 6px;
+  top: 19px;
+  width: 22px;
+  height: 34px;
+  border-radius: 10px 10px 6px 6px;
+  background: linear-gradient(180deg, #2a4a9a, #1a2c5c);
+  transform: rotate(-8deg);
+}
+.tc-mega {
+  position: absolute;
+  left: 50%;
+  top: 20px;
+  bottom: 10px;
+  width: 16px;
+  margin-left: -8px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(255, 59, 48, 0.2), #ff3b30 25%, #fff 50%, #ff3b30 75%, rgba(255, 59, 48, 0.2));
+  box-shadow: 0 0 16px #ff3b30, 0 0 36px rgba(255, 40, 16, 0.8);
+  transform-origin: top center;
+  animation: tcmega 2.6s ease-in-out infinite;
+}
+.tc-thrust {
+  position: absolute;
+  left: 50%;
+  width: 2px;
+  height: 18px;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.6));
+  animation: tcthrust 0.7s linear infinite;
+}
+.tc-thrust.t1 {
+  margin-left: -26px;
+  top: 30px;
+}
+.tc-thrust.t2 {
+  margin-left: 22px;
+  top: 40px;
+  animation-delay: 0.25s;
+}
+.tc-thrust.t3 {
+  margin-left: -12px;
+  top: 64px;
+  animation-delay: 0.45s;
+}
+@keyframes tcfly {
+  0%,
+  100% {
+    transform: translateY(6px) rotate(-3deg);
+  }
+  50% {
+    transform: translateY(-2px) rotate(3deg);
+  }
+}
+@keyframes tcmega {
+  0%,
+  100% {
+    transform: translateY(6px) scaleX(0.85);
+  }
+  50% {
+    transform: translateY(-2px) scaleX(1.15);
+  }
+}
+@keyframes tcglow {
+  50% {
+    transform: scale(1.18);
+    opacity: 0.85;
+  }
+}
+@keyframes tcthrust {
+  from {
+    transform: translateY(-14px);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+}
+/* Three cards on the start screen: a little smaller. */
+#cardslot .tcard {
+  zoom: 0.78;
+}

@@ -7,6 +7,7 @@
  * bit-identical, which is what online co-op needs (server-authoritative or
  * rollback). Rendering, audio and UI only *read* the state and the events.
  */
+import { processBeams } from './beam';
 import { processStrikes, resolveClashes } from './combat';
 import { gravityScale, onLand, onWall, type FighterHost, updateFighter } from './fighter';
 import { createFighterState, freshCombo } from './fighterUtil';
@@ -133,6 +134,7 @@ export class Simulation implements FighterHost {
     resolveClashes(this, frozen);
     processStrikes(this, frozen);
     processProjectileHits(this);
+    processBeams(this, frozen);
 
     // 4. Bookkeeping
     for (const f of st.fighters) this.postUpdate(f);
