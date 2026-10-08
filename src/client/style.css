@@ -61,6 +61,8 @@ kbd {
 }
 .card {
   max-width: 880px;
+  max-height: 96vh;
+  overflow-y: auto;
   padding: 28px 36px;
   border-radius: 14px;
   background: rgba(15, 20, 32, 0.9);

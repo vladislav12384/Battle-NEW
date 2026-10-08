@@ -250,6 +250,12 @@ export interface CommandDef {
   afterHand?: 'left' | 'right';
   /** Only in this situation (e.g. an opponent lying in front of you). */
   context?: 'targetDown';
+  /**
+   * Position of the strike in a string of strikes chained on contact
+   * (1 = opener), inclusive range. Lets two buttons cover a whole moveset:
+   * the same button gives the next strike of the string.
+   */
+  seq?: readonly [number, number];
   /** true = only in the air, false = only on the ground, omitted = both. */
   air?: boolean;
   /** Only while sprinting. */

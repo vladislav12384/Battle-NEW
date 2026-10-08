@@ -1,11 +1,14 @@
 /**
  * Keyboard + mouse + gamepad -> InputFrame.
  *
+ * The control scheme is deliberately small: two attack buttons (the strike
+ * depends on where you are in the combo), jump, dash, block, special.
+ * Both attack buttons together = throw.
+ *
  * - Presses are latched until the next simulation tick so a tap shorter than
  *   one frame (16 ms) is never lost.
- * - The "swipe" (look flick) is measured from the last ~160 ms of mouse or
- *   right-stick motion: flick left/right/up/down while pressing an attack to
- *   pick hooks, uppercuts, overheads, roundhouses...
+ * - The look flick at a press is still measured and sent (characters may use
+ *   it), but no Striker move needs it.
  */
 import { Button, type InputFrame, type Swipe, swipeCode } from '../core/input';
 
@@ -14,11 +17,7 @@ export const KEY_BINDINGS: Record<string, number> = {
   ShiftLeft: Button.DODGE,
   ShiftRight: Button.DODGE,
   Space: Button.JUMP,
-  KeyQ: Button.KICK,
   KeyE: Button.SPECIAL,
-  KeyG: Button.GRAB,
-  KeyR: Button.SUPER,
-  KeyX: Button.BURST,
   Tab: Button.LOCK,
 };
 
@@ -26,26 +25,21 @@ export const MOUSE_BINDINGS: Record<number, number> = {
   0: Button.LIGHT,
   1: Button.LOCK,
   2: Button.HEAVY,
-  3: Button.KICK, // side button "back"
-  4: Button.GRAB, // side button "forward"
 };
 
 /** Standard gamepad layout (Xbox naming). */
 const PAD_BINDINGS: [number, number][] = [
   [0, Button.JUMP], // A
-  [1, Button.KICK], // B
+  [1, Button.DODGE], // B
   [2, Button.LIGHT], // X
   [3, Button.HEAVY], // Y
   [4, Button.DODGE], // LB
   [5, Button.BLOCK], // RB
-  [6, Button.GRAB], // LT
   [7, Button.SPECIAL], // RT
-  [8, Button.SUPER], // View
-  [10, Button.BURST], // L3
   [11, Button.LOCK], // R3
 ];
 
-const ATTACKS = Button.LIGHT | Button.HEAVY | Button.KICK;
+const ATTACKS = Button.LIGHT | Button.HEAVY;
 const SWIPE_WINDOW_MS = 160;
 /** Minimum look rotation inside the window to count as a flick (radians). */
 const SWIPE_THRESHOLD = 0.05;
@@ -160,6 +154,8 @@ export class InputDevice {
         buttons |= b;
       }
     }
+    // Both attack buttons together: throw.
+    if ((buttons & Button.LIGHT) !== 0 && (buttons & Button.HEAVY) !== 0) buttons |= Button.GRAB;
     const m = Math.hypot(moveX, moveY);
     if (m > 1) {
       moveX /= m;

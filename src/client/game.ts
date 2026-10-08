@@ -536,7 +536,7 @@ export class Game {
         const m = f ? this.sim.moveById(f.charId, e.move) : null;
         if (f) sfx.play(m && m.kind !== 'light' ? 'whooshHeavy' : 'whoosh', this.nearCamera(f.pos) * 0.8);
         if (e.fighter === me && m) {
-          hud.strike(m.name, this.input.lastSwipe.swipe);
+          hud.strike(m.name, f?.stringPos ?? 1);
           if (f && f.rhythm === 0) hud.rhythm(0);
         }
         // Enemy tell: a glint on the striking limb as the wind-up starts.

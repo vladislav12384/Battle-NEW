@@ -107,6 +107,8 @@ export interface FighterState {
   onBeat: boolean;
   /** Consecutive on-beat chains (0..RULES.rhythm.max): extra damage and weight. */
   rhythm: number;
+  /** Position of the current strike in its string (1 = opener, 0 = not attacking). */
+  stringPos: number;
   /** Left exposed by a perfect dodge: acts at half speed while > 0. */
   exposed: number;
   lungeLeft: number;

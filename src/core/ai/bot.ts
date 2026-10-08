@@ -60,33 +60,34 @@ interface Step {
   onHit?: boolean;
 }
 
-const { LIGHT: L, HEAVY: H, SPECIAL: E, JUMP: J, GRAB: G, SUPER: R, KICK: K, BLOCK, DODGE, BURST } = Button;
+const { LIGHT: L, HEAVY: H, SPECIAL: E, JUMP: J, GRAB: G, BLOCK, DODGE, BURST } = Button;
 
-/** Combos the AI likes to compose (any strike chains into any other in the flow system). */
+/**
+ * Strings the AI likes. The strike that comes out depends on the position in
+ * the string (same rules as for players): L L L L = jab, cross, hook,
+ * uppercut; a power press finishes with whatever fits that position.
+ */
 const PLANS: Record<string, Step[]> = {
-  boxing: [{ button: L }, { button: L }, { button: L, swipe: 'left' }, { button: L, swipe: 'up', onHit: true }],
-  mix: [{ button: L }, { button: L, swipe: 'right' }, { button: K, swipe: 'left', onHit: true }],
+  boxing: [{ button: L }, { button: L }, { button: L }, { button: L, onHit: true }],
+  kick: [{ button: L }, { button: H, onHit: true }], // jab -> roundhouse
+  backfist: [{ button: L }, { button: L }, { button: H, onHit: true }], // jab, cross -> spinning backfist
   launch: [
     { button: L },
-    { button: L, swipe: 'down' },
-    { button: H, swipe: 'up', onHit: true },
+    { button: L },
+    { button: L },
+    { button: H, onHit: true }, // rising uppercut
     { button: J, onHit: true },
     { button: L },
     { button: L },
     { button: H },
   ],
-  hammer: [{ button: L }, { button: L }, { button: H, swipe: 'down', onHit: true }, { button: H, swipe: 'up', onHit: true }],
-  haymaker: [{ button: H }, { button: H, swipe: 'left', onHit: true }],
-  // Big readable openers: the player can dash through them on reaction.
-  roundhouseR: [{ button: K, swipe: 'left' }, { button: L, onHit: true }, { button: L, swipe: 'up', onHit: true }],
-  roundhouseL: [{ button: K, swipe: 'right' }, { button: L, onHit: true }],
-  axe: [{ button: K, swipe: 'down' }, { button: L, onHit: true }],
-  backfist: [{ button: H, swipe: 'left' }],
+  axe: [{ button: L }, { button: L }, { button: L }, { button: L, onHit: true }, { button: H, onHit: true }],
+  haymaker: [{ button: H }],
   pokeBlast: [{ button: L }, { button: E, onHit: true }],
-  teep: [{ button: K }],
-  sweep: [{ button: K, dir: 'back' }],
+  teep: [{ button: L, dir: 'back' }],
+  sweep: [{ button: H, dir: 'back' }],
   grab: [{ button: G }],
-  super: [{ button: R }],
+  super: [{ button: E }],
 };
 
 interface Threat {
@@ -378,7 +379,7 @@ export class Bot {
     if (dist > 3.0) {
       out.moveY = 1;
       if (dist > 7 && chance(this.rng, 0.01 * cfg.aggression)) this.startPlan('pokeBlast');
-      else if (dist < 3.6 && dist > 3.0 && chance(this.rng, 0.03 * cfg.aggression)) this.startPlan('teep');
+      else if (dist < 3.6 && dist > 3.0 && chance(this.rng, 0.03 * cfg.aggression)) this.startPlan('haymaker');
     } else {
       const targetBusy = target.state !== 'ground' && target.state !== 'air' && target.state !== 'attack';
       if (this.guardTimer > 0) {
@@ -409,17 +410,15 @@ export class Bot {
     if (f.meter >= 100 && chance(this.rng, 0.15)) return 'super';
     if (target.state === 'block' && chance(this.rng, 0.45)) return chance(this.rng, 0.5) ? 'grab' : 'sweep';
     const r = nextRandom(this.rng);
-    if (r < 0.16) return 'boxing';
-    if (r < 0.29) return 'mix';
-    if (r < 0.41) return 'launch';
-    if (r < 0.48) return 'hammer';
-    if (r < 0.57) return 'haymaker';
-    if (r < 0.65) return 'roundhouseR';
-    if (r < 0.71) return 'roundhouseL';
-    if (r < 0.76) return 'axe';
-    if (r < 0.81) return 'backfist';
-    if (r < 0.88) return 'grab';
-    if (r < 0.94) return 'sweep';
+    if (r < 0.18) return 'boxing';
+    if (r < 0.32) return 'kick';
+    if (r < 0.44) return 'backfist';
+    if (r < 0.58) return 'launch';
+    if (r < 0.66) return 'axe';
+    if (r < 0.76) return 'haymaker';
+    if (r < 0.84) return 'grab';
+    if (r < 0.9) return 'sweep';
+    if (r < 0.95) return 'teep';
     return 'pokeBlast';
   }
 

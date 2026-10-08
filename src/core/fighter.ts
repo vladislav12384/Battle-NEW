@@ -58,8 +58,10 @@ const STRIKE_BUTTONS = Button.LIGHT | Button.HEAVY | Button.KICK;
 export function updateFighter(sim: FighterHost, f: FighterState, input: InputFrame): void {
   const frozen = f.hitstop > 0;
   const fresh = input.buttons & ~f.input.prevButtons & STRIKE_BUTTONS;
+  // Both attack buttons together is a throw, not mashing.
+  const chord = (input.buttons & ~f.input.prevButtons & Button.GRAB) !== 0;
   feedInputFrame(f, input, frozen);
-  if (fresh && f.state === 'attack') judgePress(sim, f, fresh);
+  if (fresh && !chord && f.state === 'attack') judgePress(sim, f, fresh);
   if (f.shake > 0) f.shake--;
   if (frozen) {
     f.hitstop--;
@@ -268,12 +270,15 @@ function findCommand(
   f: FighterState,
   input: InputFrame,
   filter?: (m: MoveDef) => boolean,
+  /** Position the next strike would take in the current string (1 = opener). */
+  seq = 1,
 ): CommandDef | null {
   const dir = stickDir(input);
   const air = !f.grounded;
   for (const cmd of sim.charCommands(f)) {
     if (!buffered(f.input, cmd.button)) continue;
     if (cmd.air !== undefined && cmd.air !== air) continue;
+    if (cmd.seq && (seq < cmd.seq[0] || seq > cmd.seq[1])) continue;
     if (cmd.dir && cmd.dir !== dir) continue;
     if (cmd.swipe && cmd.swipe !== pressSwipe(f.input, cmd.button)) continue;
     if (cmd.afterHand && cmd.afterHand !== f.lastHand) continue;
@@ -299,11 +304,22 @@ function enemyDownInFront(sim: FighterHost, f: FighterState): boolean {
   return false;
 }
 
-function tryCommand(sim: FighterHost, f: FighterState, input: InputFrame, filter?: (m: MoveDef) => boolean): boolean {
-  const cmd = findCommand(sim, f, input, filter);
+function tryCommand(
+  sim: FighterHost,
+  f: FighterState,
+  input: InputFrame,
+  filter?: (m: MoveDef) => boolean,
+  seq = 1,
+): boolean {
+  const cmd = findCommand(sim, f, input, filter, seq);
   if (!cmd) return false;
   consume(f.input, cmd.button);
-  startMove(sim, f, cmd.move);
+  // A throw is both attack buttons: neither should also come out as a strike.
+  if (cmd.button === Button.GRAB) {
+    consume(f.input, Button.LIGHT);
+    consume(f.input, Button.HEAVY);
+  }
+  startMove(sim, f, cmd.move, seq);
   return true;
 }
 
@@ -451,9 +467,15 @@ function stateBlockstun(sim: FighterHost, f: FighterState, input: InputFrame): v
 // ==========================================================================
 // Getting hit and getting out
 
-function tryBurst(sim: FighterHost, f: FighterState): boolean {
-  if (!buffered(f.input, Button.BURST) || f.burst < RULES.burstMax) return false;
-  consume(f.input, Button.BURST);
+/**
+ * Combo breaker: BURST, or simply BLOCK ("defend!") while stunned with a full
+ * burst gauge. DODGE stays free for techs and rolls.
+ */
+function tryBurst(sim: FighterHost, f: FighterState, viaBlock = true): boolean {
+  if (f.burst < RULES.burstMax) return false;
+  if (buffered(f.input, Button.BURST)) consume(f.input, Button.BURST);
+  else if (viaBlock && buffered(f.input, Button.BLOCK)) consume(f.input, Button.BLOCK);
+  else return false;
   releaseGrab(sim, f);
   f.burst = 0;
   enterState(f, 'burst');
@@ -476,7 +498,7 @@ function stateHitstun(sim: FighterHost, f: FighterState, input: InputFrame): voi
 }
 
 function stateJuggle(sim: FighterHost, f: FighterState, input: InputFrame): void {
-  if (tryBurst(sim, f)) return;
+  if (tryBurst(sim, f, f.stun > 0)) return;
   if (f.stun > 0) {
     f.stun--;
     return;
@@ -485,7 +507,7 @@ function stateJuggle(sim: FighterHost, f: FighterState, input: InputFrame): void
   // Hitstun is over: the victim may recover in the air at any moment now.
   f.gap = true;
   const w = RULES.airTechBuffer;
-  for (const b of [Button.JUMP, Button.DODGE, Button.BLOCK]) {
+  for (const b of [Button.JUMP, Button.DODGE]) {
     if (buffered(f.input, b, w)) {
       consume(f.input, b);
       startTech(sim, f, input, 'air');
@@ -690,10 +712,11 @@ function stateDodge(sim: FighterHost, f: FighterState, input: InputFrame): void 
 // ==========================================================================
 // Attacks
 
-export function startMove(sim: FighterHost, f: FighterState, id: string): void {
+export function startMove(sim: FighterHost, f: FighterState, id: string, seq = 1): void {
   const m = sim.moveById(f.charId, id);
   if (!m) return;
   enterState(f, 'attack');
+  f.stringPos = seq;
   f.move = id;
   f.moveFrame = 1;
   f.moveHit = false;
@@ -763,6 +786,10 @@ function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void
     if (isHeld(f.input, Button.BLOCK)) enterState(f, 'block');
     else toNeutral(sim, f, input);
     return;
+  }
+  // The second attack button a moment after the first: it was a throw.
+  if (f.stringPos === 1 && f.moveFrame <= 4 && m.kind !== 'throw' && buffered(f.input, Button.GRAB, 4)) {
+    if (tryCommand(sim, f, input, (n) => n.kind === 'throw')) return;
   }
   if (f.charging) {
     const c = m.charge!;
@@ -851,7 +878,7 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
 
   if (flows(m) && contact && !f.mashed && frame > lastActiveFrame(m) && frame <= totalFrames(m)) {
     const rhythm = f.onBeat ? Math.min(RULES.rhythm.max, f.rhythm + 1) : 0;
-    if (tryCommand(sim, f, input, isStrike)) {
+    if (tryCommand(sim, f, input, isStrike, f.stringPos + 1)) {
       f.rhythm = rhythm;
       return true;
     }
@@ -1042,9 +1069,14 @@ function stateGrabbed(sim: FighterHost, f: FighterState, input: InputFrame): voi
     toNeutral(sim, f, input);
     return;
   }
-  if (f.stateFrame <= RULES.throwTechWindow && buffered(f.input, Button.GRAB)) {
-    consume(f.input, Button.GRAB);
-    throwTech(sim, a, f);
+  // Throw tech: any attack button (or both) in time breaks free.
+  if (f.stateFrame <= RULES.throwTechWindow) {
+    for (const b of [Button.GRAB, Button.LIGHT, Button.HEAVY]) {
+      if (!buffered(f.input, b)) continue;
+      consume(f.input, b);
+      throwTech(sim, a, f);
+      break;
+    }
   }
 }
 

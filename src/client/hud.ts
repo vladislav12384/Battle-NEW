@@ -3,7 +3,6 @@ import { RULES } from '../core/rules';
 import type { Simulation } from '../core/simulation';
 import type { FighterState } from '../core/state';
 import type { CharacterDef } from '../core/types';
-import { Button } from '../core/input';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', parent?: HTMLElement): HTMLElementTagNameMap[K] => {
   const e = document.createElement(tag);
@@ -359,11 +358,11 @@ export class Hud {
     this.combo.classList.add('pop');
   }
 
-  /** Shows which strike came out and the flick direction that picked it (teaches the controls). */
-  strike(name: string, swipe: string): void {
+  /** Shows which strike came out and its place in the string (teaches the strings). */
+  strike(name: string, position: number): void {
     this.strikeEl.className = 'strike';
-    const arrow: Record<string, string> = { none: '•', left: '←', right: '→', up: '↑', down: '↓' };
-    this.strikeEl.innerHTML = `<span class="arrow">${arrow[swipe] ?? '•'}</span>${name}`;
+    const pips = position > 1 ? `<span class="arrow">${'●'.repeat(Math.min(position, 6))}</span>` : '';
+    this.strikeEl.innerHTML = `${pips}${name}`;
     this.strikeTimer = 0.9;
     this.strikeEl.classList.remove('pop');
     void this.strikeEl.offsetWidth;
@@ -404,60 +403,38 @@ export class Hud {
   }
 
   buildMoveList(c: CharacterDef): void {
-    const btn: Record<number, string> = {
-      [Button.LIGHT]: 'ЛКМ',
-      [Button.HEAVY]: 'ПКМ',
-      [Button.KICK]: 'Q',
-      [Button.SPECIAL]: 'E',
-      [Button.GRAB]: 'G',
-      [Button.SUPER]: 'R',
-    };
-    const dir: Record<string, string> = { forward: 'W+', back: 'S+', left: 'A+', right: 'D+' };
-    const flick: Record<string, string> = { left: '←', right: '→', up: '↑', down: '↓' };
-    const rows: string[] = [];
-    for (const cmd of c.commands) {
-      const m = c.moves[cmd.move];
-      const parts = [
-        cmd.running ? 'Бег+' : '',
-        cmd.dir ? dir[cmd.dir] : '',
-        btn[cmd.button] ?? '?',
-        cmd.swipe ? ` ${flick[cmd.swipe]}` : '',
-      ];
-      const note = cmd.afterHand ? ' (чередуется с джебом)' : cmd.context === 'targetDown' ? ' (по лежачему)' : '';
-      const where = cmd.air === true ? 'в воздухе' : cmd.air === false ? 'на земле' : '';
-      const frames = `${m.startup}/${m.active}/${m.recovery}`;
-      rows.push(
-        `<tr><td><kbd>${parts.join('')}</kbd></td><td>${m.name}${note}</td><td>${where}</td><td>${frames}</td><td>${m.meterCost ? `${m.meterCost} метра` : ''}</td></tr>`,
-      );
-    }
+    const name = (id: string): string => c.moves[id]?.name ?? id;
     this.moveList.innerHTML = `
-      <h2>${c.name} — список приёмов</h2>
-      <p>Удар выбирается кнопкой и <b>взмахом мыши</b> в момент нажатия: дёрни взгляд ← → ↑ ↓ и нажми удар.
-      Стрелки в таблице — направление взмаха.</p>
-      <table><tr><th>Ввод</th><th>Приём</th><th></th><th>Кадры: старт/актив/восст.</th><th></th></tr>${rows.join('')}</table>
-      <h3>Свободные комбо</h3>
+      <h2>${c.name} — как драться</h2>
+      <p>Две кнопки атаки. Какой удар выйдет, зависит от того, <b>сколько ударов уже попало подряд</b>.
+      Жми следующий удар в момент попадания (кольцо у прицела) — это ритм. Закликивание ломает связку.</p>
+      <h3>ЛКМ — руки, серия в ритм</h3>
+      <p class="chain"><kbd>1</kbd> ${name('jab')} → <kbd>2</kbd> ${name('cross')} → <kbd>3</kbd> ${name('hook_l')} →
+      <kbd>4</kbd> ${name('uppercut')} (подбрасывает) → <kbd>5</kbd> ${name('hook_r')} → дальше по корпусу</p>
+      <h3>ПКМ — мощный удар-добивание</h3>
+      <table>
+        <tr><th>Когда</th><th>Удар</th></tr>
+        <tr><td>сразу</td><td>${name('haymaker')} — держи ПКМ, чтобы зарядить (полный заряд не блокируется)</td></tr>
+        <tr><td>после 1 удара</td><td>${name('roundhouse_r')}</td></tr>
+        <tr><td>после 2 ударов</td><td>${name('spin_backfist')} — отбрасывает в стену</td></tr>
+        <tr><td>после 3 ударов</td><td>${name('rising_uppercut')} — <kbd>Space</kbd> сразу после него = прыжок за врагом и серия в воздухе</td></tr>
+        <tr><td>после 4 ударов</td><td>${name('heel_axe')} — вбивает в землю</td></tr>
+      </table>
+      <h3>Ситуации</h3>
       <ul>
-        <li>Любой удар руками или ногами сразу после попадания (или блока) переходит в <b>любой другой</b> — комбо собираешь сам</li>
-        <li><b>Ритм</b>: жми следующий удар в момент попадания (кольцо у прицела). Каждое попадание в ритм усиливает следующее (до ×3)</li>
-        <li><b>Не закликивай</b>: нажатие во время замаха (удар ещё не долетел) ломает связку — придётся ждать конца удара</li>
-        <li>Тяжёлые удары (<kbd>ПКМ</kbd>, круговые, топор) обладают <b>стойкостью</b>: джеб на их позднем замахе не прерывает их</li>
-        <li>Пример: <kbd>ЛКМ</kbd> <kbd>ЛКМ</kbd> <kbd>ЛКМ ←</kbd> <kbd>ЛКМ ↑</kbd> <kbd>Q ←</kbd> — джеб, кросс, правый хук, апперкот, круговой</li>
-        <li>Повторять одно и то же невыгодно: однотипные удары в одном комбо слабеют, и противник вырывается</li>
-        <li><kbd>ПКМ ↑</kbd> подбрасывает → <kbd>Space</kbd> при попадании = прыжок вслед → удары в воздухе → <kbd>ПКМ</kbd> = добивание вниз</li>
-        <li><kbd>ПКМ</kbd> держать — заряд, полный заряд не блокируется. <kbd>F</kbd> во время замаха тяжёлого = <b>финт</b></li>
-        <li>Двигайся во время ударов: <kbd>W</kbd> — дотягиваешься дальше, <kbd>S</kbd> — бьёшь, сохраняя дистанцию</li>
-        <li>Удар при попадании/блоке → <kbd>E</kbd> спецприём или <kbd>R</kbd> супер. <kbd>Shift</kbd> во время атаки за 50 метра = Ki Cancel</li>
+        <li><kbd>S</kbd> + <kbd>ЛКМ</kbd> — толчок ногой (отодвинуть врага), <kbd>S</kbd> + <kbd>ПКМ</kbd> — подсечка</li>
+        <li>Бег (держи <kbd>Shift</kbd>) + <kbd>ЛКМ</kbd> — летящее колено, + <kbd>ПКМ</kbd> — удар с разбега</li>
+        <li>Враг лежит перед тобой — любая атака добивает</li>
+        <li><kbd>ЛКМ</kbd> + <kbd>ПКМ</kbd> вместе — бросок (пробивает блок)</li>
+        <li><kbd>E</kbd> — волна ки, <kbd>W</kbd>+<kbd>E</kbd> — таран плечом, <kbd>S</kbd>+<kbd>E</kbd> — восходящий дракон (неуязвимый выход из-под атаки). Полная шкала ки — <kbd>E</kbd> выпускает супер</li>
+        <li>В воздухе: <kbd>ЛКМ</kbd> — серия, <kbd>ПКМ</kbd> — удар вниз, <kbd>S</kbd>+<kbd>ПКМ</kbd> — удар ногой в пике</li>
       </ul>
-      <h3>Защита и выход из комбо</h3>
+      <h3>Защита</h3>
       <ul>
-        <li><kbd>F</kbd> держать = блок спереди; стойка поворачивается медленно, так что заход сбоку работает. Нажать <kbd>F</kbd> прямо перед ударом = <b>парирование</b></li>
-        <li><kbd>Shift</kbd>+<kbd>A</kbd>/<kbd>D</kbd> = рывок вбок (обходит врага по дуге), <kbd>Shift</kbd>/<kbd>Shift</kbd>+<kbd>S</kbd> = отскок назад. Держать — бег</li>
-        <li>Уклониться можно от <b>любого</b> удара: от тяжёлых окно большое (успеваешь по реакции), от быстрых — маленькое (нужно предугадать)</li>
-        <li>Удар идёт слева → рывок вправо (и наоборот): так окно больше. Индикатор у прицела показывает сторону и тип удара</li>
-        <li>Рывок впритык к удару = <b>идеальный уклон</b>: враг замедлен, ты получаешь стамину и бесплатную контратаку</li>
-        <li><kbd>X</kbd> в комбо при полной шкале = <b>Burst</b>, разрыв комбо</li>
-        <li>В воздухе: <kbd>Space</kbd>/<kbd>Shift</kbd> после хитстана = тех; <kbd>Shift</kbd> перед приземлением = тех на земле; <kbd>Shift</kbd> лёжа = перекат</li>
-        <li>Схватили: быстро <kbd>G</kbd> = разрыв броска</li>
+        <li><kbd>F</kbd> держать — блок; нажать в момент удара — <b>парирование</b></li>
+        <li><kbd>Shift</kbd> + <kbd>A</kbd>/<kbd>D</kbd> — рывок вбок. Удар летит слева → рви вправо. Впритык — идеальный уклон и контратака</li>
+        <li>Тебя бьют серией и шкала взрыва полна — <kbd>F</kbd>: <b>взрыв</b> отбрасывает врага</li>
+        <li>Падаешь — <kbd>Shift</kbd> перед землёй: встаёшь перекатом. Схватили — жми любую атаку</li>
       </ul>
       <p class="hint">Нажми <kbd>H</kbd>, чтобы закрыть</p>`;
   }

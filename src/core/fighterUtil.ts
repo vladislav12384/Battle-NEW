@@ -71,6 +71,7 @@ export function createFighterState(
     mashed: false,
     onBeat: false,
     rhythm: 0,
+    stringPos: 0,
     exposed: 0,
     lungeLeft: 0,
     hitstop: 0,
@@ -133,6 +134,7 @@ export function enterState(f: FighterState, s: StateId, stun = 0): void {
     f.mashed = false;
     f.onBeat = false;
     f.rhythm = 0;
+    f.stringPos = 0;
   }
   if (s !== 'ground') f.running = false;
 }

@@ -149,16 +149,17 @@ export function playSequence(
   }
 }
 
-/** A victim that raises its guard the moment it can (block is the instant escape). */
+/** A victim that raises its guard the moment it can (block is the instant escape; no combo breaker). */
 export const blocker =
   (id: number) =>
   (h: Harness): Pad => {
     const f = h.fighter(id);
+    f.burst = 0; // BLOCK while being comboed would be a burst
     if (f.combo.hits === 0 && f.state !== 'hitstun' && f.state !== 'block' && f.state !== 'blockstun') return {};
     return { buttons: Button.BLOCK };
   };
 
-/** A victim that mashes every escape option once it has been hit. */
+/** A victim that mashes every escape option once it has been hit (set its burst to 0 to test true combos). */
 export const escaper =
   (id: number) =>
   (h: Harness): Pad => {

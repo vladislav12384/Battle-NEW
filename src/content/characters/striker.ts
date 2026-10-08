@@ -20,7 +20,7 @@ import { DEG } from '../../core/math/vec3';
 import type { CharacterDef, HitDef, MoveDef } from '../../core/types';
 import { box, mirror, moveList, sweep, type TempoScale, tempoMoves } from '../dsl';
 
-const { LIGHT: L, HEAVY: H, SPECIAL: E, SUPER: R, GRAB: G, KICK: K } = Button;
+const { LIGHT: L, HEAVY: H, SPECIAL: E, GRAB: G } = Button;
 
 /**
  * Global pacing of the character. Moves below are authored at "arcade" speed
@@ -704,45 +704,51 @@ export const striker: CharacterDef = {
   },
 
   // First match wins: most specific first.
+  // Two attack buttons. WHICH strike comes out depends on how deep you are in
+  // the string (strikes chained on hit), plus a few situations: holding back,
+  // sprinting, an opponent lying in front of you, being in the air.
   commands: [
-    { move: 'barrage', button: R, air: false },
+    // LMB + RMB together: throw.
     { move: 'grab', button: G, air: false },
 
+    // Special (E): with a full ki bar it is the super.
     { move: 'shoulder_rush', button: E, dir: 'forward', air: false },
     { move: 'rising_dragon', button: E, dir: 'back', air: false },
+    { move: 'barrage', button: E, air: false },
     { move: 'ki_blast', button: E, air: false },
     { move: 'air_ki_blast', button: E, air: true },
 
+    // Situations.
+    { move: 'stomp', button: L, context: 'targetDown', air: false },
+    { move: 'stomp', button: H, context: 'targetDown', air: false },
+    { move: 'flying_knee', button: L, running: true, air: false },
     { move: 'dash_straight', button: H, running: true, air: false },
-    { move: 'rising_uppercut', button: H, swipe: 'up', air: false },
-    { move: 'hammer', button: H, swipe: 'down', air: false },
-    { move: 'spin_backfist', button: H, swipe: 'left', air: false },
-    { move: 'spin_backfist', button: H, swipe: 'right', air: false },
-    { move: 'haymaker', button: H, air: false },
-    { move: 'axe_kick', button: H, air: true },
+    { move: 'teep', button: L, dir: 'back', seq: [1, 1], air: false },
+    { move: 'sweep', button: H, dir: 'back', seq: [1, 1], air: false },
 
-    { move: 'stomp', button: K, context: 'targetDown', air: false },
-    { move: 'flying_knee', button: K, running: true, air: false },
-    { move: 'sweep', button: K, dir: 'back', air: false },
-    { move: 'high_kick', button: K, swipe: 'up', air: false },
-    { move: 'heel_axe', button: K, swipe: 'down', air: false },
-    { move: 'roundhouse_r', button: K, swipe: 'left', air: false },
-    { move: 'roundhouse_l', button: K, swipe: 'right', air: false },
-    { move: 'teep', button: K, air: false },
-    { move: 'dive_kick', button: K, swipe: 'down', air: true },
-    { move: 'dive_kick', button: K, dir: 'back', air: true },
-    { move: 'air_spin', button: K, air: true },
+    // Punch string (LMB in rhythm): jab, cross, left hook, uppercut, right hook, body shots.
+    { move: 'jab', button: L, seq: [1, 1], air: false },
+    { move: 'cross', button: L, seq: [2, 2], air: false },
+    { move: 'hook_l', button: L, seq: [3, 3], air: false },
+    { move: 'uppercut', button: L, seq: [4, 4], air: false },
+    { move: 'hook_r', button: L, seq: [5, 5], air: false },
+    { move: 'body_blow', button: L, seq: [6, 99], air: false },
 
-    { move: 'uppercut', button: L, swipe: 'up', air: false },
-    { move: 'body_blow', button: L, swipe: 'down', air: false },
-    { move: 'hook_r', button: L, swipe: 'left', air: false },
-    { move: 'hook_l', button: L, swipe: 'right', air: false },
-    { move: 'cross', button: L, afterHand: 'left', air: false },
-    { move: 'jab', button: L, air: false },
-    { move: 'air_upper', button: L, swipe: 'up', air: true },
-    { move: 'air_hammer', button: L, swipe: 'down', air: true },
-    { move: 'air_cross', button: L, afterHand: 'left', air: true },
-    { move: 'air_jab', button: L, air: true },
+    // Power (RMB): an opener on its own, a finisher that grows with the string.
+    { move: 'haymaker', button: H, seq: [1, 1], air: false },
+    { move: 'roundhouse_r', button: H, seq: [2, 2], air: false },
+    { move: 'spin_backfist', button: H, seq: [3, 3], air: false },
+    { move: 'rising_uppercut', button: H, seq: [4, 4], air: false },
+    { move: 'heel_axe', button: H, seq: [5, 99], air: false },
+
+    // Air.
+    { move: 'dive_kick', button: H, dir: 'back', air: true },
+    { move: 'axe_kick', button: H, seq: [3, 99], air: true },
+    { move: 'air_hammer', button: H, air: true },
+    { move: 'air_jab', button: L, seq: [1, 1], air: true },
+    { move: 'air_cross', button: L, seq: [2, 2], air: true },
+    { move: 'air_spin', button: L, seq: [3, 3], air: true },
+    { move: 'air_upper', button: L, seq: [4, 99], air: true },
   ],
 
   moves: tempoMoves(moveList([
@@ -862,7 +868,7 @@ export const striker: CharacterDef = {
     },
     {
       id: 'rising_dragon',
-  anim: 'dragon',
+      anim: 'dragon',
       name: 'Rising Dragon (invincible reversal)',
       kind: 'special',
       stamina: 20,

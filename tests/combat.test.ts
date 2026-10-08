@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RULES } from '../src/core/rules';
 import type { Swipe } from '../src/core/input';
 import { DEG, vec3, wrapAngle, yawTo } from '../src/core/math/vec3';
+import { startMove } from '../src/core/fighter';
 import { B, blocker, duel, escaper, playSequence, type Step } from './helpers';
 
 describe('frame data', () => {
@@ -37,60 +38,78 @@ describe('frame data', () => {
 
 const sw = (button: number, swipe?: Swipe, dir?: 'forward' | 'back'): Step => ({ button, swipe, dir });
 
-describe('directional strikes', () => {
-  const table: [string, number, Swipe, string][] = [
-    ['punch', B.LIGHT, 'none', 'jab'],
-    ['punch + flick left', B.LIGHT, 'left', 'hook_r'],
-    ['punch + flick right', B.LIGHT, 'right', 'hook_l'],
-    ['punch + flick up', B.LIGHT, 'up', 'uppercut'],
-    ['punch + flick down', B.LIGHT, 'down', 'body_blow'],
-    ['power', B.HEAVY, 'none', 'haymaker'],
-    ['power + flick up', B.HEAVY, 'up', 'rising_uppercut'],
-    ['power + flick down', B.HEAVY, 'down', 'hammer'],
-    ['power + flick left', B.HEAVY, 'left', 'spin_backfist'],
-    ['kick', B.KICK, 'none', 'teep'],
-    ['kick + flick left', B.KICK, 'left', 'roundhouse_r'],
-    ['kick + flick right', B.KICK, 'right', 'roundhouse_l'],
-    ['kick + flick up', B.KICK, 'up', 'high_kick'],
-    ['kick + flick down', B.KICK, 'down', 'heel_axe'],
+describe('strings: two buttons, the strike depends on the position in the combo', () => {
+  const L = B.LIGHT;
+  const H = B.HEAVY;
+  const table: [string, number[], string[]][] = [
+    ['LMB', [L], ['jab']],
+    ['LMB x2', [L, L], ['jab', 'cross']],
+    ['LMB x3', [L, L, L], ['jab', 'cross', 'hook_l']],
+    ['LMB x4', [L, L, L, L], ['jab', 'cross', 'hook_l', 'uppercut']],
+    ['LMB x5', [L, L, L, L, L], ['jab', 'cross', 'hook_l', 'uppercut', 'hook_r']],
+    ['RMB', [H], ['haymaker']],
+    ['LMB RMB', [L, H], ['jab', 'roundhouse_r']],
+    ['LMB x2 RMB', [L, L, H], ['jab', 'cross', 'spin_backfist']],
+    ['LMB x3 RMB', [L, L, L, H], ['jab', 'cross', 'hook_l', 'rising_uppercut']],
+    ['LMB x4 RMB', [L, L, L, L, H], ['jab', 'cross', 'hook_l', 'uppercut', 'heel_axe']],
   ];
-  for (const [label, button, swipe, move] of table) {
-    it(`${label} -> ${move}`, () => {
+  for (const [label, buttons, moves] of table) {
+    it(`${label} -> ${moves.join(', ')}`, () => {
       const { a, h } = duel(1.2);
-      h.step({ [a.id]: { buttons: button, swipe } });
-      expect(h.fighter(a.id).move).toBe(move);
+      playSequence(h, a.id, buttons.map((button) => ({ button })), {}, 200);
+      expect(h.of('attack').map((e) => e.move)).toEqual(moves);
     });
   }
 
-  it('straight punches alternate hands: jab, cross, jab', () => {
+  it('a new string starts over: a press after the combo ended is a jab again', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT)]);
-    expect(h.of('attack').map((e) => e.move)).toEqual(['jab', 'cross', 'jab']);
+    h.step({ [a.id]: { buttons: L } });
+    h.until(() => h.fighter(a.id).state === 'ground');
+    h.step({ [a.id]: { buttons: L } });
+    expect(h.of('attack').map((e) => e.move)).toEqual(['jab', 'jab']);
   });
 
-  it('back + kick is a sweep that knocks down', () => {
+  it('holding back: LMB is a push kick, RMB a sweep that knocks down', () => {
+    const teep = duel(1.2);
+    teep.h.step({ [teep.a.id]: { buttons: L, moveY: -1 } });
+    expect(teep.h.fighter(teep.a.id).move).toBe('teep');
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.KICK, 'none', 'back')]);
+    playSequence(h, a.id, [{ button: H, dir: 'back' }]);
     expect(h.of('attack')[0].move).toBe('sweep');
     expect(h.of('knockdown').length).toBe(1);
   });
 
-  it('kicking an opponent who lies in front of you is a stomp', () => {
+  it('attacking an opponent who lies in front of you is a stomp', () => {
     const { a, b, h } = duel(1.2);
-    h.step({ [a.id]: { buttons: B.KICK, moveY: -1 } }); // sweep
+    h.step({ [a.id]: { buttons: H, moveY: -1 } }); // sweep
     h.until(() => h.fighter(b.id).state === 'knockdown');
     h.until(() => h.fighter(a.id).state === 'ground');
-    h.step({ [a.id]: { buttons: B.KICK } });
+    h.step({ [a.id]: { buttons: L } });
     expect(h.fighter(a.id).move).toBe('stomp');
     h.run(15);
     expect(h.of('hit').filter((e) => e.attacker === a.id).length).toBe(2);
   });
+
+  it('both attack buttons together throw, even a couple of frames apart', () => {
+    const together = duel(1.0);
+    together.h.step({ [together.a.id]: { buttons: L | H | B.GRAB } });
+    expect(together.h.fighter(together.a.id).move).toBe('grab');
+    const { a, h } = duel(1.0);
+    h.step({ [a.id]: { buttons: L } }); // jab starts...
+    h.step({ [a.id]: { buttons: L } });
+    h.step({ [a.id]: { buttons: L | H | B.GRAB } }); // ...the second button turns it into a throw
+    expect(h.fighter(a.id).move).toBe('grab');
+    expect(h.of('mash').length).toBe(0);
+    h.run(40);
+    expect(h.of('throw').length).toBe(1);
+  });
 });
 
 describe('free-form combos', () => {
-  it('a player-composed string is a true combo: jab, cross, right hook, uppercut', () => {
+  it('the punch string is a true combo: jab, cross, hook, uppercut', () => {
     const { a, b, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'up')], {
+    h.fighter(b.id).burst = 0; // escapes only, no combo breaker
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT)], {
       [b.id]: escaper(b.id),
     });
     const end = h.of('comboEnd')[0];
@@ -99,40 +118,34 @@ describe('free-form combos', () => {
     expect(h.of('dodge').length + h.of('block').length).toBe(0);
   });
 
-  it('an uppercut pops them up long enough to follow with a roundhouse kick', () => {
+  it('the full string: the uppercut pops them up long enough for the axe kick', () => {
     const { a, b, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT, 'up'), sw(B.KICK, 'left')], { [b.id]: blocker(b.id) }, 200);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY)], { [b.id]: blocker(b.id) }, 200);
     const end = h.of('comboEnd')[0];
-    expect(end?.hits).toBe(3);
+    expect(end?.hits).toBe(5);
     expect(end?.trueCombo).toBe(true);
   });
 
-  it('punches flow into kicks: jab, left hook, roundhouse', () => {
+  it('punches flow into kicks: jab, roundhouse', () => {
     const { a, b, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT, 'right'), sw(B.KICK, 'left')], { [b.id]: escaper(b.id) });
+    h.fighter(b.id).burst = 0;
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.HEAVY)], { [b.id]: escaper(b.id) });
     const end = h.of('comboEnd')[0];
-    expect(end?.hits).toBe(3);
+    expect(end?.hits).toBe(2);
     expect(end?.trueCombo).toBe(true);
   });
 
-  it('spamming one strike goes stale and the victim escapes; mixing keeps it true', () => {
-    const spam = duel(1.2);
-    playSequence(spam.h, spam.a.id, Array.from({ length: 7 }, () => sw(B.LIGHT)), {
-      [spam.b.id]: blocker(spam.b.id),
-    });
-    const spamHits = spam.h.of('hit').filter((e) => e.attacker === spam.a.id).length;
-    expect(spamHits).toBeLessThan(7);
-    expect(spam.h.of('block').length).toBeGreaterThan(0);
-
-    const mix = duel(1.2);
-    playSequence(
-      mix.h,
-      mix.a.id,
-      [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'down'), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'right')],
-      { [mix.b.id]: blocker(mix.b.id) },
-    );
-    expect(mix.h.of('comboEnd')[0]?.hits).toBe(5);
-    expect(mix.h.of('comboEnd')[0]?.trueCombo).toBe(true);
+  it('strings do not go on forever: late hits go stale and the victim drops out of the combo', () => {
+    const { a, b, h } = duel(1.2);
+    playSequence(h, a.id, Array.from({ length: 9 }, () => sw(B.LIGHT)), { [b.id]: blocker(b.id) }, 200);
+    const hits = h.of('hit').filter((e) => e.attacker === a.id);
+    expect(hits.length).toBeGreaterThanOrEqual(5);
+    expect(hits.length).toBeLessThan(9);
+    expect(h.of('whiff').length).toBeGreaterThan(0);
+    // The repeated body shots at the end of the string hit for less.
+    const body = hits.filter((e) => e.move === 'body_blow').map((e) => e.damage);
+    expect(body.length).toBeGreaterThanOrEqual(2);
+    expect(body[1]).toBeLessThan(body[0]);
   });
 
   it('a whiffed heavy cannot chain: it has to recover', () => {
@@ -156,7 +169,7 @@ describe('free-form combos', () => {
       // Mash punches: none of them may come out before the jab is over.
       h.step({ [a.id]: { buttons: t % 2 ? B.LIGHT : 0 } });
       t++;
-      if (h.fighter(a.id).move === 'cross') break;
+      if (h.of('attack').length > 1) break;
     }
     expect(h.of('whiff').length).toBe(1);
     expect(t).toBeGreaterThanOrEqual(jab.startup + jab.active + jab.recovery + RULES.whiffPenalty.light);
@@ -176,6 +189,7 @@ describe('free-form combos', () => {
 
   it('pressing the next punch after the first one ends leaves a gap the victim escapes through', () => {
     const { a, b, h } = duel(1.2);
+    h.fighter(b.id).burst = 0;
     h.step({ [a.id]: { buttons: B.LIGHT } });
     h.until(() => h.fighter(a.id).state === 'ground', { [b.id]: escaper(b.id) });
     h.run(2, { [b.id]: escaper(b.id) });
@@ -194,12 +208,12 @@ describe('free-form combos', () => {
     playSequence(
       h,
       a.id,
-      [sw(B.LIGHT), sw(B.LIGHT, 'down'), sw(B.HEAVY, 'up'), sw(B.JUMP), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY)],
+      [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY), sw(B.JUMP), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY)],
       { [b.id]: watch },
       240,
     );
     const hits = h.of('hit').filter((e) => e.attacker === a.id);
-    expect(hits.length).toBe(6);
+    expect(hits.length).toBe(7);
     expect(maxHeight).toBeGreaterThan(2);
     expect(h.of('groundBounce').length).toBe(1);
     expect(h.of('comboEnd')[0]?.hits).toBeGreaterThanOrEqual(6);
@@ -207,9 +221,9 @@ describe('free-form combos', () => {
 
   it('damage scaling makes later hits weaker', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'up')]);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT)]);
     const hits = h.of('hit');
-    // 3rd hit (right hook, 34 base) is scaled to 90%, 4th (uppercut, 32) to 80%
+    // 3rd hit (left hook, 34 base) is scaled to 90%, 4th (uppercut, 32) to 80%
     // (on top of the on-beat rhythm bonus).
     const beat = (n: number) => 1 + hits[n].rhythm * RULES.rhythm.damage;
     expect(hits[2].damage).toBe(Math.round(34 * 0.9 * beat(2)));
@@ -218,20 +232,20 @@ describe('free-form combos', () => {
 
   it('juggle points: an airborne victim over the limit can no longer be hit', () => {
     const { a, b, h } = duel(1.2);
-    h.step({ [a.id]: { buttons: B.HEAVY, swipe: 'up' } }); // launcher
+    startMove(h.sim, h.fighter(a.id), 'rising_uppercut');
     h.until(() => h.of('hit').length > 0);
     h.fighter(b.id).combo.juggle = RULES.juggleLimit;
     h.run(25);
     const before = h.of('hit').length;
     h.until(() => h.fighter(a.id).state === 'ground');
-    h.step({ [a.id]: { buttons: B.HEAVY, swipe: 'up' } });
+    startMove(h.sim, h.fighter(a.id), 'rising_uppercut');
     h.run(20);
     expect(h.of('hit').length).toBe(before);
   });
 
   it('counter hit: hitting an attack in startup deals bonus damage', () => {
     const { a, b, h } = duel(1.3);
-    h.step({ [b.id]: { buttons: B.LIGHT, swipe: 'left' } }); // hook, startup 11
+    h.step({ [b.id]: { buttons: B.LIGHT, moveY: -1 } }); // push kick, startup 14
     h.step({ [a.id]: { buttons: B.LIGHT } }); // jab, startup 8: lands first
     h.until(() => h.of('hit').length > 0);
     const hit = h.of('hit')[0];
@@ -360,7 +374,7 @@ describe('defense', () => {
     h.step({ [b.id]: { buttons: B.BLOCK } });
     h.until(() => h.of('parry').length > 0, { [b.id]: { buttons: B.BLOCK } });
     h.until(() => h.fighter(b.id).hitstop === 0);
-    playSequence(h, b.id, [sw(B.HEAVY, 'up')]);
+    playSequence(h, b.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY)]);
     expect(h.of('hit').some((e) => e.attacker === b.id && e.launch)).toBe(true);
   });
 
@@ -416,7 +430,7 @@ describe('escaping combos', () => {
       const f = h.fighter(b.id);
       if (!burst && f.combo.hits >= 3 && f.hitstop === 0) {
         burst = true;
-        return { buttons: B.BURST };
+        return { buttons: B.BLOCK }; // F while being comboed = burst
       }
       return {};
     };
@@ -432,7 +446,7 @@ describe('escaping combos', () => {
 
   it('air tech: a juggled victim recovers once hitstun ends', () => {
     const { a, b, h } = duel(1.2);
-    h.step({ [a.id]: { buttons: B.HEAVY, swipe: 'up' } });
+    startMove(h.sim, h.fighter(a.id), 'rising_uppercut');
     h.until(() => h.fighter(b.id).state === 'juggle');
     h.until(() => h.fighter(b.id).stun === 0 && h.fighter(b.id).hitstop === 0);
     h.step({ [b.id]: { buttons: B.JUMP } });
@@ -451,7 +465,7 @@ describe('escaping combos', () => {
       }
       return {};
     };
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.KICK, 'left')], { [b.id]: victim });
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.HEAVY)], { [b.id]: victim });
     expect(pressed).toBe(true);
     expect(h.of('knockdown').length).toBe(0);
     expect(h.of('tech').some((e) => e.kind === 'ground')).toBe(true);
@@ -459,7 +473,7 @@ describe('escaping combos', () => {
 
   it('without a tech the same combo ends in a knockdown', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.KICK, 'left')]);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.HEAVY)]);
     expect(h.of('knockdown').length).toBe(1);
   });
 
@@ -503,13 +517,13 @@ describe('environment', () => {
     const wallZ = -sim.arena.halfZ;
     h.fighter(a.id).pos = vec3(0, 0, wallZ + 2.8);
     h.fighter(b.id).pos = vec3(0, 0, wallZ + 1.6);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.KICK, 'left')]);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.HEAVY)]);
     expect(h.of('wallSplat').length).toBe(1);
   });
 
-  it('hammer fist bounces a standing victim off the ground once per combo', () => {
+  it('the axe kick at the end of the string bounces the victim off the ground once per combo', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY, 'down')]);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY)], {}, 200);
     expect(h.of('groundBounce').length).toBe(1);
   });
 });
@@ -561,7 +575,7 @@ describe('interactions', () => {
   it('super costs meter and is invulnerable on startup', () => {
     const { a, b, h } = duel(1.6);
     h.fighter(a.id).meter = 120;
-    h.step({ [a.id]: { buttons: B.SUPER }, [b.id]: { buttons: B.LIGHT } });
+    h.step({ [a.id]: { buttons: B.SPECIAL }, [b.id]: { buttons: B.LIGHT } }); // full ki bar: E is the super
     h.run(70);
     expect(h.fighter(a.id).meter).toBeLessThan(120 - 100 + 60);
     expect(h.of('super').length).toBe(1);

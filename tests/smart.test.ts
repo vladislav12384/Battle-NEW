@@ -191,7 +191,7 @@ describe('rhythm, not mashing', () => {
 
   it('pressing on impact chains, and on-beat chains build rhythm and hit harder', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT, swipe: 'left' }, { button: B.KICK, swipe: 'left' }]);
+    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }, { button: B.HEAVY }]);
     const hits = h.of('hit');
     expect(hits.length).toBe(4);
     expect(hits.map((e) => e.rhythm)).toEqual([0, 1, 2, 3]);
