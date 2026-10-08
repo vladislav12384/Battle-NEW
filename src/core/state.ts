@@ -54,6 +54,8 @@ export interface ComboState {
   otgHits: number;
   /** False once the victim had a chance to act (tech/escape) and got hit anyway. */
   trueCombo: boolean;
+  /** Families of the most recent hits (stale-move tracking). */
+  recent: string[];
 }
 
 /** Properties of the last hit that matter when the victim hits the ground or a wall. */
@@ -122,6 +124,10 @@ export interface FighterState {
   perfectDodged: boolean;
   /** Perfect-dodge reward: dodge recovery can be cancelled into attacks. */
   dodgeCounter: boolean;
+
+  /** Hand of the last hand strike, for alternating jab/cross ('' = reset). */
+  lastHand: '' | 'left' | 'right';
+  handTimer: number;
 
   airJumpsLeft: number;
   airDodged: boolean;
@@ -192,6 +198,12 @@ export type GameEvent =
       launch: boolean;
       point: Vec3;
       hitstop: number;
+      /** Unit direction the victim was knocked (world space). */
+      dir: Vec3;
+      /** Knockback speed (m/s), a good proxy for how hard the hit was. */
+      force: number;
+      /** Move that landed the hit (null for throws/burst without a move). */
+      move: string | null;
     }
   | { type: 'block'; attacker: number; victim: number; chip: number; guard: number; point: Vec3 }
   | { type: 'parry'; attacker: number; victim: number; point: Vec3 }
@@ -202,6 +214,7 @@ export type GameEvent =
   | { type: 'attack'; fighter: number; move: string }
   | { type: 'super'; fighter: number; move: string }
   | { type: 'kiCancel'; fighter: number }
+  | { type: 'feint'; fighter: number }
   | { type: 'jump'; fighter: number; high: boolean }
   | { type: 'land'; fighter: number }
   | { type: 'dodge'; fighter: number }

@@ -1,7 +1,7 @@
 import { CHARACTERS } from '../src/content';
-import { Button, type InputFrame } from '../src/core/input';
+import { chainWindowStart } from '../src/core/fighter';
+import { Button, type InputFrame, type Swipe, swipeCode } from '../src/core/input';
 import { vec3, yawTo } from '../src/core/math/vec3';
-import { totalFrames } from '../src/core/moves';
 import { type SimOptions, Simulation } from '../src/core/simulation';
 import type { FighterState, GameEvent, GameEventType } from '../src/core/state';
 
@@ -25,6 +25,7 @@ export interface Pad {
   moveY?: number;
   pitch?: number;
   yaw?: number;
+  swipe?: Swipe;
 }
 
 export type PadSource = Pad | ((h: Harness) => Pad);
@@ -47,6 +48,7 @@ export function aimInput(sim: Simulation, f: FighterState, pad: Pad = {}): Input
     yaw: pad.yaw ?? (enemy ? yawTo(f.pos, enemy.pos) : f.yaw),
     pitch: pad.pitch ?? 0,
     buttons: pad.buttons ?? 0,
+    swipe: swipeCode(pad.swipe ?? 'none'),
   };
 }
 
@@ -93,6 +95,7 @@ export class Harness {
 export interface Step {
   button: number;
   dir?: 'forward' | 'back';
+  swipe?: Swipe;
 }
 
 /**
@@ -118,6 +121,7 @@ export function playSequence(
     const f = h.fighter(attackerId);
     let buttons = 0;
     let moveY = 0;
+    let swipe: Swipe = 'none';
     if (awaitingKey !== null && keyOf(f) !== awaitingKey) awaitingKey = null;
     const step = steps[i];
     if (step) {
@@ -126,17 +130,14 @@ export function playSequence(
       const m = h.sim.moveOf(f);
       if (awaitingKey === null) {
         if (f.state === 'attack' && m) {
-          const w =
-            m.cancels?.find((c) => c.button === step.button)?.frames[0] ??
-            (step.button === Button.JUMP ? m.jumpCancel?.frames[0] : undefined) ??
-            totalFrames(m);
-          ready = f.moveFrame >= w - 3;
+          ready = f.moveFrame >= chainWindowStart(m, step.button, f.moveHit || f.moveBlocked) - 3;
         } else {
           ready = f.state === 'ground' || f.state === 'air';
         }
       }
       if (ready && !(prev & step.button)) {
         buttons = step.button;
+        swipe = step.swipe ?? 'none';
         awaitingKey = keyOf(f);
         i++;
       }
@@ -144,7 +145,7 @@ export function playSequence(
       return;
     }
     prev = buttons;
-    h.step({ ...others, [attackerId]: { buttons, moveY } });
+    h.step({ ...others, [attackerId]: { buttons, moveY, swipe } });
   }
 }
 

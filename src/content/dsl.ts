@@ -1,6 +1,6 @@
 /** Tiny helpers that keep move definitions compact and readable. */
 import type { Vec3Tuple } from '../core/math/vec3';
-import type { CharacterDef, HitboxDef, HitDef, MoveDef } from '../core/types';
+import type { CharacterDef, HitboxDef, HitDef, KnockbackDef, LimbId, MoveDef } from '../core/types';
 
 /** Sphere hitbox. */
 export function box(
@@ -78,4 +78,34 @@ export function validateCharacter(c: CharacterDef): string[] {
     if (m.kind === 'throw' && !m.throw) errors.push(`${m.id}: throw move without throw data`);
   }
   return errors;
+}
+
+const FLIP_LIMB: Partial<Record<LimbId, LimbId>> = { lHand: 'rHand', rHand: 'lHand', lFoot: 'rFoot', rFoot: 'lFoot' };
+const flipKb = (k: KnockbackDef | undefined): KnockbackDef | undefined =>
+  k && { ...k, side: k.side === undefined ? undefined : -k.side };
+function flipHit<T extends Partial<HitDef>>(h: T): T {
+  // Only touch keys that exist: a partial counter override must not erase the base knockback.
+  const out: T = { ...h };
+  if (h.knockback) out.knockback = flipKb(h.knockback);
+  if (h.airKnockback) out.airKnockback = flipKb(h.airKnockback);
+  if (h.counter) out.counter = flipHit(h.counter);
+  return out;
+}
+
+/** Left/right mirror of a move (left hook <-> right hook...). */
+export function mirror(m: MoveDef, id: string, name: string): MoveDef {
+  return {
+    ...m,
+    id,
+    name,
+    hand: m.hand === 'left' ? 'right' : m.hand === 'right' ? 'left' : undefined,
+    hitboxes: m.hitboxes.map((h) => ({
+      ...h,
+      a: [-h.a[0], h.a[1], h.a[2]],
+      b: h.b ? [-h.b[0], h.b[1], h.b[2]] : undefined,
+      limb: h.limb ? (FLIP_LIMB[h.limb] ?? h.limb) : undefined,
+      hit: flipHit(h.hit),
+    })),
+    motion: m.motion?.map((mo) => ({ ...mo, side: mo.side === undefined ? undefined : -mo.side })),
+  };
 }

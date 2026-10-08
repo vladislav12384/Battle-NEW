@@ -207,6 +207,13 @@ export function damageScaling(hitNumber: number, minScale: number): number {
   return Math.max(minScale, 1 - RULES.damageScaleStep * (hitNumber - RULES.damageScaleStart + 1));
 }
 
+/** How many times a move family appears among a combo's recent hits. */
+export function staleCount(recent: readonly string[], family: string): number {
+  let n = 0;
+  for (const r of recent) if (r === family) n++;
+  return n;
+}
+
 /** Hitstun multiplier after `comboFrames` frames of continuous combo. */
 export function hitstunDecay(comboFrames: number): number {
   if (comboFrames <= RULES.hitstunDecayStart) return 1;
@@ -243,16 +250,31 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
   if (!c.attackers.includes(a.id)) c.attackers.push(a.id);
   if (wasDown) c.otgHits++;
 
+  // ---- stale moves: repeating the same kind of strike in one combo weakens it
+  const family = ctx.move ? (ctx.move.family ?? ctx.move.id) : null;
+  const stale = family ? staleCount(c.recent, family) : 0;
+  const staleStun = Math.max(RULES.staleHitstunMin, 1 - RULES.staleHitstunStep * stale);
+  const staleDmg = Math.max(RULES.staleDamageMin, 1 - RULES.staleDamageStep * stale);
+  if (family) {
+    c.recent.push(family);
+    if (c.recent.length > RULES.staleWindow) c.recent.shift();
+  }
+
   // ---- damage
   const minScale = hit.minScaling ?? ctx.move?.minScaling ?? RULES.damageScaleMin;
-  const raw = hit.damage * damageScaling(c.hits, minScale) * (counter ? RULES.counterDamage : 1) * (1 + (ctx.chargeBonus ?? 0));
+  const raw =
+    hit.damage *
+    damageScaling(c.hits, minScale) *
+    staleDmg *
+    (counter ? RULES.counterDamage : 1) *
+    (1 + (ctx.chargeBonus ?? 0));
   const dmg = hit.damage > 0 ? Math.max(1, Math.round(raw)) : 0;
   v.health -= dmg;
   c.damage += dmg;
 
   // ---- stun (decays in long combos so nothing is infinite)
   const decay = hitstunDecay(sim.state.frame - c.startFrame);
-  const stun = Math.max(1, Math.round(hit.hitstun * decay) + (counter ? RULES.counterHitstun : 0));
+  const stun = Math.max(1, Math.round(hit.hitstun * decay * staleStun) + (counter ? RULES.counterHitstun : 0));
 
   // ---- knockback in the attacker's frame, scaled by the victim's weight
   const kb = wasAirborne && hit.airKnockback ? hit.airKnockback : hit.knockback;
@@ -325,9 +347,18 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
     launch: launches,
     point: ctx.point,
     hitstop: stop,
+    ...knockDir(vx, vy, vz, ctx),
+    move: ctx.move?.id ?? null,
   });
   if (ko) sim.emit({ type: 'ko', fighter: v.id, attacker: a.id });
   return 'hit';
+}
+
+function knockDir(vx: number, vy: number, vz: number, ctx: HitContext): { dir: Vec3; force: number } {
+  const force = Math.hypot(vx, vy, vz);
+  if (force > 1e-3) return { dir: vec3(vx / force, vy / force, vz / force), force };
+  const away = horizontalAway(ctx.from, ctx.victim.pos);
+  return { dir: vec3(away.x, 0, away.z), force: 0 };
 }
 
 // --------------------------------------------------------------------------

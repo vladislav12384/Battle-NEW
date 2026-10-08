@@ -11,7 +11,7 @@
  *   are live on frames a..b (inclusive). "startup 5" means frames 1-5 are
  *   wind-up and the first hitbox can connect on frame 6.
  */
-import type { Dir } from './input';
+import type { Dir, Swipe } from './input';
 import type { Vec3Tuple } from './math/vec3';
 
 export type LimbId = 'lHand' | 'rHand' | 'lFoot' | 'rFoot' | 'body' | 'head';
@@ -117,6 +117,7 @@ export interface CancelDef {
   button: number;
   into: string;
   dir?: Dir;
+  swipe?: Swipe;
   frames: [number, number];
   /** always: works on whiff. contact: on hit or block. hit: only on hit. */
   on: 'always' | 'contact' | 'hit';
@@ -160,10 +161,29 @@ export interface MoveDef {
   motion?: MotionDef[];
   /** Gravity multiplier while performing the move (air moves hover). */
   gravityScale?: number;
-  /** Rotation toward the target during startup (radians/frame). */
-  tracking?: number;
-  /** Max lunge distance toward the target during startup (meters). */
+  /**
+   * How fast the body follows the camera during startup (radians/frame).
+   * Lower = heavier, more committed. Defaults by kind (RULES.turnRate).
+   */
+  turnRate?: number;
+  /** Max step-in toward an aim-assisted target during startup (meters). */
   lunge?: number;
+  /**
+   * Fraction of walk speed the fighter can still move with during the move
+   * (halved on active frames). Defaults by kind (RULES.defaultMobility).
+   */
+  mobility?: number;
+  /** Hand that throws the strike; straights alternate hands automatically. */
+  hand?: 'left' | 'right';
+  /**
+   * Moves of the same family repeated within a combo lose hitstun and damage
+   * ("stale"), so varied combos go further than spamming one strike.
+   */
+  family?: string;
+  /** Can chain freely into other strikes after its active frames (default true for light/heavy). */
+  flow?: boolean;
+  /** Can be feinted (cancelled with BLOCK during early startup). Default true for heavies. */
+  feint?: boolean;
   /** Whether hitboxes follow the vertical aim (default true). */
   pitchAim?: boolean;
   invuln?: InvulnDef[];
@@ -186,6 +206,12 @@ export interface CommandDef {
   button: number;
   /** Required stick direction; omitted = any direction. */
   dir?: Dir;
+  /** Required look-flick direction at the press; omitted = any. */
+  swipe?: Swipe;
+  /** Only if the previous hand strike used this hand (alternating straights). */
+  afterHand?: 'left' | 'right';
+  /** Only in this situation (e.g. an opponent lying in front of you). */
+  context?: 'targetDown';
   /** true = only in the air, false = only on the ground, omitted = both. */
   air?: boolean;
   /** Only while sprinting. */

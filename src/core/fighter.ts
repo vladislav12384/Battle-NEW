@@ -17,6 +17,7 @@ import {
   feedInput,
   type InputFrame,
   isHeld,
+  pressSwipe,
   stickDir,
 } from './input';
 import {
@@ -35,7 +36,7 @@ import {
   rightFromYaw,
   clone,
 } from './math/vec3';
-import { chestHeight, chestPos, inFrames, moveReach, totalFrames } from './moves';
+import { chestHeight, chestPos, inFrames, lastActiveFrame, moveReach, totalFrames } from './moves';
 import { accelerateTo, applyFriction, type WallContact } from './physics';
 import { type ProjectileHost, spawnProjectile } from './projectiles';
 import { DT, RULES } from './rules';
@@ -78,6 +79,7 @@ function tickTimers(f: FighterState): void {
     f.parryCooldown--;
   }
   if (f.dodgeChainTimer > 0) f.dodgeChainTimer--;
+  if (f.lastHand !== '' && ++f.handTimer > RULES.handResetFrames) f.lastHand = '';
 }
 
 function runState(sim: FighterHost, f: FighterState, input: InputFrame): void {
@@ -152,6 +154,8 @@ export function bestTarget(
   yaw: number,
   range: number,
   cone: number,
+  /** Enemies closer than this count even outside the cone (lock-on convenience). */
+  closeRange = 1.2,
 ): FighterState | null {
   let best: FighterState | null = null;
   let bestScore = Infinity;
@@ -163,7 +167,7 @@ export function bestTarget(
     const d = Math.hypot(dh, e.pos.y - f.pos.y);
     if (d > range) continue;
     const ang = Math.abs(wrapAngle(yawFromDir(dx, dz) - yaw));
-    if (ang > cone && dh > 1.2) continue;
+    if (ang > cone && dh > closeRange) continue;
     const score = d + ang * 4;
     if (score < bestScore) {
       bestScore = score;
@@ -191,16 +195,30 @@ function pitchTo(sim: FighterHost, f: FighterState, t: FighterState): number {
   return Math.atan2(b.y - a.y, hDistance(a, b));
 }
 
-/** Facing in neutral states: follow the camera, or the lock-on target. */
-function faceFree(sim: FighterHost, f: FighterState, input: InputFrame): void {
+const clampPitch = (p: number): number => clamp(p, -1.4, 1.4);
+
+/** Where the player is looking (camera), or the lock-on target if locked. */
+function lookTarget(sim: FighterHost, f: FighterState, input: InputFrame): { yaw: number; pitch: number } {
   const t = lockedTarget(sim, f);
-  if (t) {
-    f.yaw = approachAngle(f.yaw, yawTo(f.pos, t.pos), RULES.lockTurnRate);
-    f.aimPitch = approach(f.aimPitch, pitchTo(sim, f, t), RULES.lockTurnRate);
-  } else {
-    f.yaw = wrapAngle(input.yaw);
-    f.aimPitch = clamp(input.pitch, -1.4, 1.4);
+  if (t) return { yaw: yawTo(f.pos, t.pos), pitch: pitchTo(sim, f, t) };
+  return { yaw: wrapAngle(input.yaw), pitch: clampPitch(input.pitch) };
+}
+
+/** Facing in neutral states: follow the camera exactly (or turn toward the lock-on target). */
+function faceFree(sim: FighterHost, f: FighterState, input: InputFrame): void {
+  if (lockedTarget(sim, f)) {
+    turnToward(sim, f, input, RULES.lockTurnRate);
+    return;
   }
+  f.yaw = wrapAngle(input.yaw);
+  f.aimPitch = clampPitch(input.pitch);
+}
+
+/** Turns the body toward where the player looks, at most `rate` radians per frame. */
+function turnToward(sim: FighterHost, f: FighterState, input: InputFrame, rate: number): void {
+  const look = lookTarget(sim, f, input);
+  f.yaw = approachAngle(f.yaw, look.yaw, rate);
+  f.aimPitch = approach(f.aimPitch, look.pitch, rate);
 }
 
 /** Camera-relative stick as a world-space direction (length <= 1). */
@@ -208,8 +226,9 @@ function wishDir(f: FighterState, input: InputFrame): Vec3 {
   const m = Math.hypot(input.moveX, input.moveY);
   if (m < 0.1) return vec3();
   const k = Math.min(1, m) / m;
-  const d = localDirToWorld(f.yaw, input.moveX * k, input.moveY * k);
-  return d;
+  // Movement is relative to the camera, which may differ from the body during attacks.
+  const yaw = f.lockTarget >= 0 ? f.yaw : input.yaw;
+  return localDirToWorld(yaw, input.moveX * k, input.moveY * k);
 }
 
 // ==========================================================================
@@ -227,13 +246,28 @@ function findCommand(
     if (!buffered(f.input, cmd.button)) continue;
     if (cmd.air !== undefined && cmd.air !== air) continue;
     if (cmd.dir && cmd.dir !== dir) continue;
+    if (cmd.swipe && cmd.swipe !== pressSwipe(f.input, cmd.button)) continue;
+    if (cmd.afterHand && cmd.afterHand !== f.lastHand) continue;
     if (cmd.running && !f.running) continue;
+    if (cmd.context === 'targetDown' && !enemyDownInFront(sim, f)) continue;
     const m = sim.moveById(f.charId, cmd.move);
     if (!m || (m.meterCost ?? 0) > f.meter) continue;
     if (filter && !filter(m)) continue;
     return cmd;
   }
   return null;
+}
+
+/** An opponent lying on the ground right in front of the fighter (for stomps). */
+function enemyDownInFront(sim: FighterHost, f: FighterState): boolean {
+  for (const e of sim.state.fighters) {
+    if (e.team === f.team || e.state !== 'knockdown') continue;
+    const dx = e.pos.x - f.pos.x;
+    const dz = e.pos.z - f.pos.z;
+    if (Math.hypot(dx, dz) > 2.3) continue;
+    if (Math.abs(wrapAngle(yawFromDir(dx, dz) - f.yaw)) < 60 * (Math.PI / 180)) return true;
+  }
+  return false;
 }
 
 function tryCommand(sim: FighterHost, f: FighterState, input: InputFrame, filter?: (m: MoveDef) => boolean): boolean {
@@ -350,7 +384,8 @@ function tryOpenParry(f: FighterState): void {
 }
 
 function stateBlock(sim: FighterHost, f: FighterState, input: InputFrame): void {
-  faceFree(sim, f, input);
+  // A raised guard turns slowly: flanking a blocking opponent works.
+  turnToward(sim, f, input, RULES.blockTurnRate);
   // A tapped block stays up until its parry window closes, so tapping to parry works.
   if (!isHeld(f.input, Button.BLOCK) && f.parryWindow === 0) {
     enterState(f, 'ground');
@@ -366,6 +401,7 @@ function stateBlock(sim: FighterHost, f: FighterState, input: InputFrame): void 
 }
 
 function stateBlockstun(sim: FighterHost, f: FighterState, input: InputFrame): void {
+  turnToward(sim, f, input, RULES.blockTurnRate);
   tryOpenParry(f);
   applyFriction(f, RULES.stunFriction);
   if (f.stun > 0) {
@@ -397,6 +433,7 @@ function tryBurst(sim: FighterHost, f: FighterState): boolean {
 
 function stateHitstun(sim: FighterHost, f: FighterState, input: InputFrame): void {
   if (tryBurst(sim, f)) return;
+  turnToward(sim, f, input, RULES.stunTurnRate);
   applyFriction(f, RULES.stunFriction);
   if (f.stun > 0) {
     f.stun--;
@@ -464,6 +501,7 @@ function stateTech(sim: FighterHost, f: FighterState, input: InputFrame): void {
 
 function stateStagger(sim: FighterHost, f: FighterState, input: InputFrame): void {
   if (tryBurst(sim, f)) return;
+  turnToward(sim, f, input, RULES.stunTurnRate);
   applyFriction(f, RULES.stunFriction);
   if (f.stun > 0) {
     f.stun--;
@@ -492,6 +530,7 @@ function stateWallsplat(sim: FighterHost, f: FighterState): void {
 }
 
 function stateRecoil(sim: FighterHost, f: FighterState, input: InputFrame): void {
+  turnToward(sim, f, input, RULES.stunTurnRate);
   if (f.grounded) applyFriction(f, RULES.stunFriction);
   if (f.stateFrame >= RULES.recoilCancelFrom) {
     const acted = f.grounded ? tryGroundActions(sim, f, input, true) : tryAirActions(sim, f, input);
@@ -596,19 +635,47 @@ export function startMove(sim: FighterHost, f: FighterState, id: string): void {
   f.charging = false;
   f.armorLeft = m.armor?.hits ?? 0;
   f.meter -= m.meterCost ?? 0;
-  f.lungeLeft = m.lunge ?? RULES.defaultLunge[m.kind];
-  f.moveTarget = pickMoveTarget(sim, f, m)?.id ?? -1;
+  if (m.hand) {
+    f.lastHand = m.hand;
+    f.handTimer = 0;
+  }
+  // Step-in budget: holding forward commits further, holding back keeps your
+  // distance (unless the move sets its own lunge, e.g. back+kick sweep).
+  const dir = stickDir(f.lastInput);
+  const lunge = m.lunge ?? RULES.defaultLunge[m.kind];
+  if (dir === 'back' && m.lunge === undefined) f.lungeLeft = 0;
+  else f.lungeLeft = lunge + (dir === 'forward' && lunge > 0 ? RULES.lungeForwardBonus : 0);
+  f.moveTarget = pickAssistTarget(sim, f, m)?.id ?? -1;
   sim.emit({ type: 'attack', fighter: f.id, move: id });
   if (m.kind === 'super') sim.emit({ type: 'super', fighter: f.id, move: id });
   applyMoveFrame(sim, f, m, f.lastInput);
 }
 
-function pickMoveTarget(sim: FighterHost, f: FighterState, m: MoveDef): FighterState | null {
-  const range = moveReach(m) + (m.lunge ?? RULES.defaultLunge[m.kind]) + RULES.autoTargetExtraRange;
+/**
+ * Aim assist target: the lock-on target, or an enemy close to the crosshair
+ * and within reach. It only nudges the body and steps in; the camera is never moved.
+ */
+function pickAssistTarget(sim: FighterHost, f: FighterState, m: MoveDef): FighterState | null {
+  const range = moveReach(m) + f.lungeLeft + RULES.assistExtraRange;
   const lock = lockedTarget(sim, f);
   if (lock && distance(lock.pos, f.pos) <= Math.max(range, 8)) return lock;
-  return bestTarget(sim, f, f.yaw, range, RULES.autoTargetCone);
+  return bestTarget(sim, f, wrapAngle(f.lastInput.yaw), range, RULES.assistCone, 0);
 }
+
+/** First move frame on which `button` can chain out of `m` (for bots, tests and tooling). */
+export function chainWindowStart(m: MoveDef, button: number, contact: boolean): number {
+  const explicit = m.cancels?.find((c) => c.button === button);
+  if (explicit) return explicit.frames[0];
+  if (button === Button.JUMP && m.jumpCancel) return m.jumpCancel.frames[0];
+  if (flows(m)) {
+    if (contact) return lastActiveFrame(m) + 1;
+    if (m.kind === 'light') return lastActiveFrame(m) + 1 + RULES.flowWhiffDelay;
+  }
+  return totalFrames(m) + 1;
+}
+
+const flows = (m: MoveDef): boolean => m.flow ?? (m.kind === 'light' || m.kind === 'heavy');
+const isStrike = (m: MoveDef): boolean => m.kind === 'light' || m.kind === 'heavy';
 
 function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void {
   const m = sim.moveOf(f);
@@ -616,12 +683,21 @@ function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void
     toNeutral(sim, f, input);
     return;
   }
+  // Feint: BLOCK during early startup of a heavy cancels it (bait parries, mix up timing).
+  const canFeint = m.feint ?? m.kind === 'heavy';
+  if (canFeint && f.moveFrame <= m.startup - RULES.feintLock && buffered(f.input, Button.BLOCK, 2)) {
+    consume(f.input, Button.BLOCK);
+    sim.emit({ type: 'feint', fighter: f.id });
+    if (isHeld(f.input, Button.BLOCK)) enterState(f, 'block');
+    else toNeutral(sim, f, input);
+    return;
+  }
   if (f.charging) {
     const c = m.charge!;
     if (isHeld(f.input, c.button) && f.chargeFrames < c.maxFrames) {
       f.chargeFrames++;
-      steer(sim, f, m, input, true);
-      if (f.grounded) applyFriction(f, sim.statsOf(f).groundAccel);
+      steer(sim, f, m, input);
+      moveDuringAttack(sim, f, m, input, null, null);
       return;
     }
     f.charging = false;
@@ -650,10 +726,13 @@ function finishMove(sim: FighterHost, f: FighterState, m: MoveDef, input: InputF
 
 /**
  * Cancel routes, checked on the frame the move would advance to:
- *   1. explicit chain routes (target combos / strings)
+ *   1. explicit routes (special strings)
  *   2. jump cancel (launchers)
- *   3. system cancels: normal -> special/super on contact, special -> super on hit
- *   4. ki cancel: spend meter to cancel anything into a dodge
+ *   3. FLOW: light/heavy strikes chain freely into any strike right after
+ *      their active frames (lights also on whiff, a bit later). Which strike
+ *      comes next is entirely the player's choice: button + look flick + stick.
+ *   4. system cancels: normal -> special/super on contact, special -> super on hit
+ *   5. ki cancel: spend meter to cancel anything into a dodge
  */
 function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number, input: InputFrame): boolean {
   const contact = f.moveHit || f.moveBlocked;
@@ -664,6 +743,7 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
   for (const c of m.cancels ?? []) {
     if (!inFrames(c.frames, frame) || !ok(c.on) || !buffered(f.input, c.button)) continue;
     if (c.dir && c.dir !== dir) continue;
+    if (c.swipe && c.swipe !== pressSwipe(f.input, c.button)) continue;
     const into = sim.moveById(f.charId, c.into);
     if (!into || (into.meterCost ?? 0) > f.meter) continue;
     consume(f.input, c.button);
@@ -678,8 +758,13 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
     return true;
   }
 
+  if (flows(m) && frame <= totalFrames(m)) {
+    const from = lastActiveFrame(m) + 1 + (contact ? 0 : m.kind === 'light' ? RULES.flowWhiffDelay : Infinity);
+    if (frame >= from && tryCommand(sim, f, input, isStrike)) return true;
+  }
+
   if (frame > m.startup) {
-    if ((m.kind === 'light' || m.kind === 'heavy') && contact) {
+    if (isStrike(m) && contact) {
       if (tryCommand(sim, f, input, (n) => n.kind === 'special' || n.kind === 'super')) return true;
     } else if (m.kind === 'special' && f.moveHit) {
       if (tryCommand(sim, f, input, (n) => n.kind === 'super')) return true;
@@ -696,26 +781,70 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
   return false;
 }
 
-/** Rotates toward the target (strong during startup, slight afterwards). */
-function steer(sim: FighterHost, f: FighterState, m: MoveDef, input: InputFrame, startup: boolean): void {
+/**
+ * The body follows the camera during an attack (fast in startup, slower once
+ * the strike is out), plus a small aim-assist offset toward the assist target.
+ * The camera itself is never touched.
+ */
+function steer(sim: FighterHost, f: FighterState, m: MoveDef, input: InputFrame): void {
+  const fr = f.moveFrame;
+  const rate =
+    fr <= m.startup || f.charging
+      ? (m.turnRate ?? RULES.turnRate[m.kind])
+      : fr <= lastActiveFrame(m)
+        ? RULES.activeTurnRate
+        : RULES.recoveryTurnRate;
+  const look = lookTarget(sim, f, input);
+  let yaw = look.yaw;
+  let pitch = look.pitch;
   const t = f.moveTarget >= 0 ? sim.fighter(f.moveTarget) : undefined;
-  const target = t && t.state !== 'ko' ? t : null;
-  const rate = startup ? (m.tracking ?? RULES.defaultTracking[m.kind]) : RULES.attackTurnRate;
-  if (target) {
-    f.yaw = approachAngle(f.yaw, yawTo(f.pos, target.pos), rate);
-    f.aimPitch = approach(f.aimPitch, pitchTo(sim, f, target), rate);
+  if (t && t.state !== 'ko' && f.lockTarget !== t.id) {
+    yaw += clamp(wrapAngle(yawTo(f.pos, t.pos) - look.yaw), -RULES.assistMaxYaw, RULES.assistMaxYaw);
+    pitch += clamp(pitchTo(sim, f, t) - look.pitch, -RULES.assistMaxPitch, RULES.assistMaxPitch);
+  }
+  f.yaw = approachAngle(f.yaw, yaw, rate);
+  f.aimPitch = approach(f.aimPitch, clampPitch(pitch), rate);
+}
+
+/**
+ * Locomotion during an attack: the player keeps (reduced) control of their
+ * feet, on top of the move's root motion and step-in.
+ */
+function moveDuringAttack(
+  sim: FighterHost,
+  f: FighterState,
+  m: MoveDef,
+  input: InputFrame,
+  rootX: number | null,
+  rootZ: number | null,
+): void {
+  const stats = sim.statsOf(f);
+  const w = wishDir(f, input);
+  if (!f.grounded) {
+    if (rootX !== null && rootZ !== null) {
+      f.vel.x = rootX + w.x * stats.airSpeed * 0.4;
+      f.vel.z = rootZ + w.z * stats.airSpeed * 0.4;
+    } else if (w.x !== 0 || w.z !== 0) {
+      accelerateTo(f, w.x * stats.airSpeed, w.z * stats.airSpeed, stats.airAccel * 0.6);
+    }
+    return;
+  }
+  const active = f.moveFrame > m.startup && f.moveFrame <= lastActiveFrame(m);
+  const mob = (m.mobility ?? RULES.defaultMobility[m.kind]) * (active ? RULES.activeMobilityScale : 1);
+  const tx = w.x * stats.walkSpeed * mob + (rootX ?? 0);
+  const tz = w.z * stats.walkSpeed * mob + (rootZ ?? 0);
+  if (rootX !== null) {
+    f.vel.x = tx;
+    f.vel.z = tz;
   } else {
-    const free = startup ? RULES.attackTurnRate * 2 : RULES.attackTurnRate;
-    f.yaw = approachAngle(f.yaw, input.yaw, free);
-    f.aimPitch = approach(f.aimPitch, clamp(input.pitch, -1.4, 1.4), free);
+    accelerateTo(f, tx, tz, stats.groundAccel);
   }
 }
 
-/** Per-frame effects of a move: steering, lunge, root motion, projectiles. */
+/** Per-frame effects of a move: steering, root motion, step-in, locomotion, projectiles. */
 function applyMoveFrame(sim: FighterHost, f: FighterState, m: MoveDef, input: InputFrame): void {
   const fr = f.moveFrame;
-  const startup = fr <= m.startup + 1;
-  steer(sim, f, m, input, startup);
+  steer(sim, f, m, input);
 
   let vx: number | null = null;
   let vz: number | null = null;
@@ -739,13 +868,7 @@ function applyMoveFrame(sim: FighterHost, f: FighterState, m: MoveDef, input: In
     vz = (vz ?? 0) + lunge.z;
     if (m.air) f.vel.y = lunge.y;
   }
-
-  if (vx !== null && vz !== null) {
-    f.vel.x = vx;
-    f.vel.z = vz;
-  } else if (f.grounded) {
-    applyFriction(f, sim.statsOf(f).groundAccel);
-  }
+  moveDuringAttack(sim, f, m, input, vx, vz);
 
   m.projectiles?.forEach((p, i) => {
     if (p.frame === fr) spawnProjectile(sim, f, m, i);
@@ -755,8 +878,9 @@ function applyMoveFrame(sim: FighterHost, f: FighterState, m: MoveDef, input: In
 }
 
 /**
- * Magnetism: during startup, close the gap to the target so the move's
- * hitbox lands. Budgeted per move (RULES.defaultLunge / MoveDef.lunge).
+ * Step-in: during startup, close a small gap to the assisted target so a
+ * strike thrown at someone just out of reach still lands. Small budget,
+ * and only for targets already near the crosshair.
  */
 function lungeVelocity(sim: FighterHost, f: FighterState, m: MoveDef): Vec3 | null {
   if (f.moveTarget < 0 || f.moveFrame > m.startup || f.lungeLeft <= 0) return null;

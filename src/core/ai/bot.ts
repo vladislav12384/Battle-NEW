@@ -10,7 +10,8 @@
  *   dodge   - sidesteps attacks at the last moment
  *   fighter - full AI: footsies, strings, launch combos, defense, escapes
  */
-import { Button, type Dir, type InputFrame, neutralInput } from '../input';
+import { chainWindowStart } from '../fighter';
+import { Button, type Dir, type InputFrame, neutralInput, type Swipe, swipeCode } from '../input';
 import { chance, nextRandom, type RngState } from '../math/rng';
 import { hDistance, wrapAngle, yawFromDir, yawTo } from '../math/vec3';
 import { chestHeight, moveReach, totalFrames } from '../moves';
@@ -53,28 +54,33 @@ export const DEFAULT_BOT: BotConfig = {
 interface Step {
   button: number;
   dir?: Dir;
+  /** Look flick sent with the press (picks hooks, uppercuts, overheads...). */
+  swipe?: Swipe;
   /** Only continue if the current move hit. */
   onHit?: boolean;
 }
 
-const { LIGHT: L, HEAVY: H, SPECIAL: E, JUMP: J, GRAB: G, SUPER: R, BLOCK, DODGE, BURST } = Button;
+const { LIGHT: L, HEAVY: H, SPECIAL: E, JUMP: J, GRAB: G, SUPER: R, KICK: K, BLOCK, DODGE, BURST } = Button;
 
+/** Combos the AI likes to compose (any strike chains into any other in the flow system). */
 const PLANS: Record<string, Step[]> = {
-  string: [{ button: L }, { button: L }, { button: L }, { button: L }],
+  boxing: [{ button: L }, { button: L }, { button: L, swipe: 'left' }, { button: L, swipe: 'up', onHit: true }],
+  mix: [{ button: L }, { button: L, swipe: 'right' }, { button: K, swipe: 'left', onHit: true }],
   launch: [
     { button: L },
-    { button: L },
-    { button: H, onHit: true },
+    { button: L, swipe: 'down' },
+    { button: H, swipe: 'up', onHit: true },
     { button: J, onHit: true },
     { button: L },
     { button: L },
     { button: H },
   ],
-  hammer: [{ button: L }, { button: L }, { button: L }, { button: H, onHit: true }, { button: H, onHit: true }],
-  haymaker: [{ button: H }, { button: H, onHit: true }],
+  hammer: [{ button: L }, { button: L }, { button: H, swipe: 'down', onHit: true }, { button: H, swipe: 'up', onHit: true }],
+  haymaker: [{ button: H }, { button: H, swipe: 'left', onHit: true }],
   pokeBlast: [{ button: L }, { button: E, onHit: true }],
+  teep: [{ button: K }],
+  sweep: [{ button: K, dir: 'back' }],
   grab: [{ button: G }],
-  dash: [{ button: H, dir: 'forward' }],
   super: [{ button: R }],
 };
 
@@ -92,8 +98,11 @@ export class Bot {
   private plan: Step[] = [];
   private stepDir: Dir = 'neutral';
   private stepDirTimer = 0;
+  private stepSwipe: Swipe = 'none';
   private lastMove: string | null = null;
   private lastMoveFrame = 0;
+  /** A step was pressed; wait for its move to start before pressing the next. */
+  private waiting = false;
   private cooldown = 30;
   private strafe = 1;
   private strafeTimer = 0;
@@ -181,6 +190,8 @@ export class Bot {
       }
     }
     out.buttons = buttons;
+    out.swipe = swipeCode(this.stepSwipe);
+    this.stepSwipe = 'none';
     this.prevButtons = buttons;
     return out;
   }
@@ -323,7 +334,7 @@ export class Bot {
       (tm !== null && target.moveFrame > tm.startup + tm.active && totalFrames(tm) - target.moveFrame > 10);
 
     if (punishable && dist < 3.2 && f.state === 'ground') {
-      this.startPlan(target.state === 'stagger' ? 'launch' : 'string');
+      this.startPlan(target.state === 'stagger' ? 'launch' : 'boxing');
       taps |= this.runPlan(sim, f);
       return { held, taps };
     }
@@ -331,7 +342,7 @@ export class Bot {
     if (dist > 3.0) {
       out.moveY = 1;
       if (dist > 7 && chance(this.rng, 0.01 * cfg.aggression)) this.startPlan('pokeBlast');
-      else if (dist < 4.6 && dist > 3.4 && chance(this.rng, 0.02 * cfg.aggression)) this.startPlan('dash');
+      else if (dist < 3.6 && dist > 3.0 && chance(this.rng, 0.03 * cfg.aggression)) this.startPlan('teep');
     } else {
       const targetBusy = target.state !== 'ground' && target.state !== 'air' && target.state !== 'attack';
       if (this.guardTimer > 0) {
@@ -341,8 +352,8 @@ export class Bot {
           out.moveX = this.strafe * 0.4;
           return { held, taps };
         }
-      } else if (!targetBusy && chance(this.rng, 0.03 * cfg.blockChance)) {
-        this.guardTimer = 20 + Math.floor(nextRandom(this.rng) * 40);
+      } else if (!targetBusy && chance(this.rng, 0.015 * cfg.blockChance)) {
+        this.guardTimer = 15 + Math.floor(nextRandom(this.rng) * 25);
       }
       if (--this.strafeTimer <= 0) {
         this.strafeTimer = 30 + Math.floor(nextRandom(this.rng) * 60);
@@ -351,23 +362,24 @@ export class Bot {
       out.moveX = this.strafe * 0.7;
       out.moveY = dist > 2.3 ? 0.6 : dist < 1.4 ? -0.6 : 0;
       if (this.cooldown <= 0 && f.state === 'ground' && chance(this.rng, 0.06 * cfg.aggression)) {
-        this.startPlan(this.pickPlan(sim, f, target));
+        this.startPlan(this.pickPlan(f, target));
       }
     }
     if (this.plan.length > 0) taps |= this.runPlan(sim, f);
     return { held, taps };
   }
 
-  private pickPlan(sim: Simulation, f: FighterState, target: FighterState): string {
+  private pickPlan(f: FighterState, target: FighterState): string {
     if (f.meter >= 100 && chance(this.rng, 0.15)) return 'super';
-    if (target.state === 'block' && chance(this.rng, 0.45)) return 'grab';
+    if (target.state === 'block' && chance(this.rng, 0.45)) return chance(this.rng, 0.5) ? 'grab' : 'sweep';
     const r = nextRandom(this.rng);
-    if (r < 0.3) return 'string';
-    if (r < 0.55) return 'launch';
+    if (r < 0.22) return 'boxing';
+    if (r < 0.4) return 'mix';
+    if (r < 0.58) return 'launch';
     if (r < 0.7) return 'hammer';
-    if (r < 0.82) return 'haymaker';
-    if (r < 0.9) return 'grab';
-    void sim;
+    if (r < 0.8) return 'haymaker';
+    if (r < 0.88) return 'grab';
+    if (r < 0.94) return 'sweep';
     return 'pokeBlast';
   }
 
@@ -375,36 +387,37 @@ export class Bot {
     this.plan = PLANS[name].map((s) => ({ ...s }));
     this.lastMove = null;
     this.lastMoveFrame = 0;
+    this.waiting = false;
   }
 
   /** Feeds the next step of the current plan at the right moment. */
   private runPlan(sim: Simulation, f: FighterState): number {
+    // Detect a newly started move (move frames only go backwards when a new move starts;
+    // during hit stop they don't move at all).
+    if (f.state === 'attack') {
+      if (f.move !== this.lastMove || f.moveFrame < this.lastMoveFrame) this.waiting = false;
+      this.lastMove = f.move;
+      this.lastMoveFrame = f.moveFrame;
+    } else if (f.state !== 'ground') {
+      this.waiting = false;
+    }
     const step = this.plan[0];
     if (!step) return 0;
     const m: MoveDef | null = sim.moveOf(f);
-    const started = sim.state.frame - f.moveFrame;
-    const inNewMove = f.state === 'attack' && (f.move !== this.lastMove || started !== this.lastMoveFrame);
-
     if (f.state === 'attack' && m) {
-      if (inNewMove) {
-        this.lastMove = f.move;
-        this.lastMoveFrame = started;
-      }
-      if (step.onHit && f.moveFrame > m.startup + m.active && !f.moveHit) {
-        return this.endPlan();
-      }
-      const window =
-        m.cancels?.find((c) => c.button === step.button)?.frames[0] ??
-        (step.button === J ? m.jumpCancel?.frames[0] : undefined) ??
-        totalFrames(m) - 1;
+      if (this.waiting) return 0;
+      if (step.onHit && f.moveFrame > m.startup + m.active && !f.moveHit) return this.endPlan();
+      const window = Math.min(chainWindowStart(m, step.button, f.moveHit || f.moveBlocked), totalFrames(m) - 1);
       if (f.moveFrame >= window - 2 && (!step.onHit || f.moveHit)) return this.tapStep(step);
       return 0;
     }
     if (f.state === 'ground' || f.state === 'air' || f.state === 'block') {
-      if (this.lastMove !== null && step.button !== J && f.state === 'ground') {
-        // A string was interrupted (whiff, clash...).
+      if (this.waiting) {
+        // The press didn't come out (string interrupted): give up on this plan.
+        this.waiting = false;
         return this.endPlan();
       }
+      if (this.lastMove !== null && step.button !== J && f.state === 'ground') return this.endPlan();
       return this.tapStep(step);
     }
     if (f.state === 'hitstun' || f.state === 'juggle' || f.state === 'blockstun' || f.state === 'stagger') {
@@ -415,14 +428,17 @@ export class Bot {
 
   private tapStep(step: Step): number {
     this.plan.shift();
+    this.waiting = true;
     this.stepDir = step.dir ?? 'neutral';
     this.stepDirTimer = 10;
+    this.stepSwipe = step.swipe ?? 'none';
     if (this.plan.length === 0) this.cooldown = 25 + Math.floor(nextRandom(this.rng) * 40);
     return step.button;
   }
 
   private endPlan(): number {
     this.plan = [];
+    this.waiting = false;
     this.cooldown = 20 + Math.floor(nextRandom(this.rng) * 30);
     return 0;
   }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { RULES } from '../src/core/rules';
-import { vec3 } from '../src/core/math/vec3';
-import { B, duel, escaper, playSequence } from './helpers';
+import type { Swipe } from '../src/core/input';
+import { DEG, vec3, wrapAngle, yawTo } from '../src/core/math/vec3';
+import { B, duel, escaper, playSequence, type Step } from './helpers';
 
 describe('frame data', () => {
   it('a jab (startup 5) connects on its 6th frame', () => {
@@ -33,10 +34,62 @@ describe('frame data', () => {
   });
 });
 
-describe('combos', () => {
-  it('L,L,L,L is a true combo: a victim mashing dodge/block cannot escape', () => {
+const sw = (button: number, swipe?: Swipe, dir?: 'forward' | 'back'): Step => ({ button, swipe, dir });
+
+describe('directional strikes', () => {
+  const table: [string, number, Swipe, string][] = [
+    ['punch', B.LIGHT, 'none', 'jab'],
+    ['punch + flick left', B.LIGHT, 'left', 'hook_r'],
+    ['punch + flick right', B.LIGHT, 'right', 'hook_l'],
+    ['punch + flick up', B.LIGHT, 'up', 'uppercut'],
+    ['punch + flick down', B.LIGHT, 'down', 'body_blow'],
+    ['power', B.HEAVY, 'none', 'haymaker'],
+    ['power + flick up', B.HEAVY, 'up', 'rising_uppercut'],
+    ['power + flick down', B.HEAVY, 'down', 'hammer'],
+    ['power + flick left', B.HEAVY, 'left', 'spin_backfist'],
+    ['kick', B.KICK, 'none', 'teep'],
+    ['kick + flick left', B.KICK, 'left', 'roundhouse_r'],
+    ['kick + flick right', B.KICK, 'right', 'roundhouse_l'],
+    ['kick + flick up', B.KICK, 'up', 'high_kick'],
+    ['kick + flick down', B.KICK, 'down', 'heel_axe'],
+  ];
+  for (const [label, button, swipe, move] of table) {
+    it(`${label} -> ${move}`, () => {
+      const { a, h } = duel(1.2);
+      h.step({ [a.id]: { buttons: button, swipe } });
+      expect(h.fighter(a.id).move).toBe(move);
+    });
+  }
+
+  it('straight punches alternate hands: jab, cross, jab', () => {
+    const { a, h } = duel(1.2);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT)]);
+    expect(h.of('attack').map((e) => e.move)).toEqual(['jab', 'cross', 'jab']);
+  });
+
+  it('back + kick is a sweep that knocks down', () => {
+    const { a, h } = duel(1.2);
+    playSequence(h, a.id, [sw(B.KICK, 'none', 'back')]);
+    expect(h.of('attack')[0].move).toBe('sweep');
+    expect(h.of('knockdown').length).toBe(1);
+  });
+
+  it('kicking an opponent who lies in front of you is a stomp', () => {
     const { a, b, h } = duel(1.2);
-    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }], {
+    h.step({ [a.id]: { buttons: B.KICK, moveY: -1 } }); // sweep
+    h.until(() => h.fighter(b.id).state === 'knockdown');
+    h.until(() => h.fighter(a.id).state === 'ground');
+    h.step({ [a.id]: { buttons: B.KICK } });
+    expect(h.fighter(a.id).move).toBe('stomp');
+    h.run(15);
+    expect(h.of('hit').filter((e) => e.attacker === a.id).length).toBe(2);
+  });
+});
+
+describe('free-form combos', () => {
+  it('a player-composed string is a true combo: jab, cross, right hook, uppercut', () => {
+    const { a, b, h } = duel(1.2);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'up')], {
       [b.id]: escaper(b.id),
     });
     const end = h.of('comboEnd')[0];
@@ -45,7 +98,58 @@ describe('combos', () => {
     expect(h.of('dodge').length + h.of('block').length).toBe(0);
   });
 
-  it('pressing the 2nd jab after the first one ends leaves a gap the victim escapes through', () => {
+  it('punches flow into kicks: jab, left hook, roundhouse', () => {
+    const { a, b, h } = duel(1.2);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT, 'right'), sw(B.KICK, 'left')], { [b.id]: escaper(b.id) });
+    const end = h.of('comboEnd')[0];
+    expect(end?.hits).toBe(3);
+    expect(end?.trueCombo).toBe(true);
+  });
+
+  it('spamming one strike goes stale and the victim escapes; mixing keeps it true', () => {
+    const spam = duel(1.2);
+    playSequence(spam.h, spam.a.id, Array.from({ length: 7 }, () => sw(B.LIGHT)), {
+      [spam.b.id]: escaper(spam.b.id),
+    });
+    const spamHits = spam.h.of('hit').filter((e) => e.attacker === spam.a.id).length;
+    expect(spamHits).toBeLessThan(7);
+    expect(spam.h.of('dodge').length + spam.h.of('block').length).toBeGreaterThan(0);
+
+    const mix = duel(1.2);
+    playSequence(
+      mix.h,
+      mix.a.id,
+      [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'down'), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'right')],
+      { [mix.b.id]: escaper(mix.b.id) },
+    );
+    expect(mix.h.of('comboEnd')[0]?.hits).toBe(5);
+    expect(mix.h.of('comboEnd')[0]?.trueCombo).toBe(true);
+  });
+
+  it('a whiffed heavy cannot chain: it has to recover', () => {
+    const { a, h, sim } = duel(5);
+    const hay = sim.chars.striker.moves.haymaker;
+    h.step({ [a.id]: { buttons: B.HEAVY } });
+    h.run(hay.startup + hay.active + 1); // whiffed, now recovering
+    h.step({ [a.id]: { buttons: B.LIGHT } });
+    h.run(3);
+    expect(h.fighter(a.id).move).toBe('haymaker');
+    h.until(() => h.fighter(a.id).state !== 'attack');
+    expect(h.of('attack').length).toBe(1);
+  });
+
+  it('a whiffed light chains a few frames later than on hit', () => {
+    const { a, h, sim } = duel(5);
+    const jab = sim.chars.striker.moves.jab;
+    h.step({ [a.id]: { buttons: B.LIGHT } });
+    h.step();
+    h.step({ [a.id]: { buttons: B.LIGHT } }); // buffered
+    const start = jab.startup + jab.active + 1 + RULES.flowWhiffDelay;
+    h.until(() => h.fighter(a.id).move === 'cross');
+    expect(h.sim.state.frame).toBe(start);
+  });
+
+  it('pressing the next punch after the first one ends leaves a gap the victim escapes through', () => {
     const { a, b, h } = duel(1.2);
     h.step({ [a.id]: { buttons: B.LIGHT } });
     h.until(() => h.fighter(a.id).state === 'ground', { [b.id]: escaper(b.id) });
@@ -65,15 +169,7 @@ describe('combos', () => {
     playSequence(
       h,
       a.id,
-      [
-        { button: B.LIGHT },
-        { button: B.LIGHT },
-        { button: B.HEAVY },
-        { button: B.JUMP },
-        { button: B.LIGHT },
-        { button: B.LIGHT },
-        { button: B.HEAVY },
-      ],
+      [sw(B.LIGHT), sw(B.LIGHT, 'down'), sw(B.HEAVY, 'up'), sw(B.JUMP), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY)],
       { [b.id]: watch },
     );
     const hits = h.of('hit').filter((e) => e.attacker === a.id);
@@ -85,24 +181,23 @@ describe('combos', () => {
 
   it('damage scaling makes later hits weaker', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }]);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'up')]);
     const hits = h.of('hit');
-    // 3rd hit (hook, 38 base) is scaled to 90%, 4th (roundhouse, 65) to 80%.
-    expect(hits[2].damage).toBe(Math.round(38 * 0.9));
-    expect(hits[3].damage).toBe(Math.round(65 * 0.8));
+    // 3rd hit (right hook, 34 base) is scaled to 90%, 4th (uppercut, 32) to 80%.
+    expect(hits[2].damage).toBe(Math.round(34 * 0.9));
+    expect(hits[3].damage).toBe(Math.round(32 * 0.8));
   });
 
   it('juggle points: an airborne victim over the limit can no longer be hit', () => {
     const { a, b, h } = duel(1.2);
-    h.step({ [a.id]: { buttons: B.HEAVY, moveY: -1 } }); // launcher
-    h.until(() => h.of('hit').length > 0, { [a.id]: { moveY: -1 } });
+    h.step({ [a.id]: { buttons: B.HEAVY, swipe: 'up' } }); // launcher
+    h.until(() => h.of('hit').length > 0);
     h.fighter(b.id).combo.juggle = RULES.juggleLimit;
     h.run(25);
-    // A second launcher on the falling victim whiffs.
     const before = h.of('hit').length;
     h.until(() => h.fighter(a.id).state === 'ground');
-    h.step({ [a.id]: { buttons: B.HEAVY, moveY: -1 } });
-    h.run(20, { [a.id]: { moveY: -1 } });
+    h.step({ [a.id]: { buttons: B.HEAVY, swipe: 'up' } });
+    h.run(20);
     expect(h.of('hit').length).toBe(before);
   });
 
@@ -115,7 +210,58 @@ describe('combos', () => {
     const hit = h.of('hit')[0];
     expect(hit.attacker).toBe(a.id);
     expect(hit.counter).toBe(true);
-    expect(hit.damage).toBe(Math.round(28 * RULES.counterDamage));
+    expect(hit.damage).toBe(Math.round(26 * RULES.counterDamage));
+  });
+});
+
+describe('player control', () => {
+  it('attacks go where you look: a jab thrown well away from the enemy whiffs', () => {
+    const { a, b, h } = duel(1.2);
+    const away = yawTo(h.fighter(a.id).pos, h.fighter(b.id).pos) + 40 * DEG;
+    h.step({ [a.id]: { buttons: B.LIGHT, yaw: away } });
+    h.run(12, { [a.id]: { yaw: away } });
+    expect(h.of('hit').length).toBe(0);
+    expect(Math.abs(wrapAngle(h.fighter(a.id).yaw - away))).toBeLessThan(1e-6);
+  });
+
+  it('aim assist nudges the body (never the camera) toward an enemy near the crosshair', () => {
+    const { a, b, h } = duel(1.2);
+    const off = yawTo(h.fighter(a.id).pos, h.fighter(b.id).pos) + 10 * DEG;
+    h.step({ [a.id]: { buttons: B.LIGHT, yaw: off } });
+    h.run(8, { [a.id]: { yaw: off } });
+    expect(h.of('hit').length).toBe(1);
+    const diff = Math.abs(wrapAngle(h.fighter(a.id).yaw - off));
+    expect(diff).toBeGreaterThan(0);
+    expect(diff).toBeLessThanOrEqual(RULES.assistMaxYaw + 1e-6);
+  });
+
+  it('you keep moving while you strike', () => {
+    const { a, h } = duel(3);
+    const x0 = h.fighter(a.id).pos.x;
+    h.step({ [a.id]: { buttons: B.LIGHT, moveX: 1 } });
+    h.run(12, { [a.id]: { moveX: 1 } });
+    expect(h.fighter(a.id).pos.x - x0).toBeGreaterThan(0.15);
+  });
+
+  it('feint: block during a heavy startup cancels it', () => {
+    const { a, h } = duel(3);
+    h.step({ [a.id]: { buttons: B.HEAVY } });
+    h.run(3);
+    h.step({ [a.id]: { buttons: B.BLOCK } });
+    expect(h.of('feint').length).toBe(1);
+    expect(h.fighter(a.id).state).toBe('block');
+  });
+
+  it('a raised guard turns slowly: a strike from the flank gets through', () => {
+    const { a, b, h } = duel(1.2);
+    const toA = yawTo(h.fighter(b.id).pos, h.fighter(a.id).pos);
+    h.fighter(b.id).yaw = toA + 120 * DEG; // b looks away, guard up
+    h.run(15, { [b.id]: { buttons: B.BLOCK, yaw: toA + 120 * DEG } });
+    // b snaps the camera toward a as the jab comes, but the guard lags behind.
+    h.step({ [a.id]: { buttons: B.LIGHT }, [b.id]: { buttons: B.BLOCK, yaw: toA } });
+    h.run(10, { [b.id]: { buttons: B.BLOCK, yaw: toA } });
+    expect(h.of('hit').length).toBe(1);
+    expect(h.of('block').length).toBe(0);
   });
 });
 
@@ -184,7 +330,7 @@ describe('defense', () => {
     h.step({ [b.id]: { buttons: B.BLOCK } });
     h.until(() => h.of('parry').length > 0, { [b.id]: { buttons: B.BLOCK } });
     h.until(() => h.fighter(b.id).hitstop === 0);
-    playSequence(h, b.id, [{ button: B.HEAVY, dir: 'back' }]);
+    playSequence(h, b.id, [sw(B.HEAVY, 'up')]);
     expect(h.of('hit').some((e) => e.attacker === b.id && e.launch)).toBe(true);
   });
 
@@ -214,8 +360,9 @@ describe('defense', () => {
     const { a, b, h } = duel(1.2);
     h.step({ [b.id]: { buttons: B.DODGE, moveX: 1 } }); // early sidestep
     h.run(8);
-    h.step({ [a.id]: { buttons: B.LIGHT } });
-    h.run(12);
+    // The attacker chases: holding forward adds step-in.
+    h.step({ [a.id]: { buttons: B.LIGHT, moveY: 1 } });
+    h.run(12, { [a.id]: { moveY: 1 } });
     const hit = h.of('hit')[0];
     expect(hit).toBeDefined();
     expect(hit.punish).toBe(true);
@@ -255,8 +402,8 @@ describe('escaping combos', () => {
 
   it('air tech: a juggled victim recovers once hitstun ends', () => {
     const { a, b, h } = duel(1.2);
-    h.step({ [a.id]: { buttons: B.HEAVY, moveY: -1 } });
-    h.until(() => h.fighter(b.id).state === 'juggle', { [a.id]: { moveY: -1 } });
+    h.step({ [a.id]: { buttons: B.HEAVY, swipe: 'up' } });
+    h.until(() => h.fighter(b.id).state === 'juggle');
     h.until(() => h.fighter(b.id).stun === 0 && h.fighter(b.id).hitstop === 0);
     h.step({ [b.id]: { buttons: B.JUMP } });
     h.step();
@@ -274,9 +421,7 @@ describe('escaping combos', () => {
       }
       return {};
     };
-    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }], {
-      [b.id]: victim,
-    });
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.KICK, 'left')], { [b.id]: victim });
     expect(pressed).toBe(true);
     expect(h.of('knockdown').length).toBe(0);
     expect(h.of('tech').some((e) => e.kind === 'ground')).toBe(true);
@@ -284,7 +429,7 @@ describe('escaping combos', () => {
 
   it('without a tech the same combo ends in a knockdown', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }]);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.KICK, 'left')]);
     expect(h.of('knockdown').length).toBe(1);
   });
 
@@ -322,19 +467,19 @@ describe('throws', () => {
 });
 
 describe('environment', () => {
-  it('roundhouse into a wall causes a wall splat', () => {
+  it('a roundhouse kick into a wall causes a wall splat', () => {
     const { a, b, h, sim } = duel(1.2);
-    // Put the victim 2.5m in front of the -Z wall.
+    // Put the victim 1.6m in front of the -Z wall.
     const wallZ = -sim.arena.halfZ;
-    h.fighter(a.id).pos = vec3(0, 0, wallZ + 3.7);
-    h.fighter(b.id).pos = vec3(0, 0, wallZ + 2.5);
-    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }]);
+    h.fighter(a.id).pos = vec3(0, 0, wallZ + 2.8);
+    h.fighter(b.id).pos = vec3(0, 0, wallZ + 1.6);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.KICK, 'left')]);
     expect(h.of('wallSplat').length).toBe(1);
   });
 
   it('hammer fist bounces a standing victim off the ground once per combo', () => {
     const { a, h } = duel(1.2);
-    playSequence(h, a.id, [{ button: B.LIGHT }, { button: B.LIGHT }, { button: B.LIGHT }, { button: B.HEAVY }]);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY, 'down')]);
     expect(h.of('groundBounce').length).toBe(1);
   });
 });

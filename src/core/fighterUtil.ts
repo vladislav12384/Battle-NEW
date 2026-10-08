@@ -29,6 +29,7 @@ export function freshCombo(): ComboState {
     wallSplatUsed: false,
     otgHits: 0,
     trueCombo: true,
+    recent: [],
   };
 }
 
@@ -84,6 +85,8 @@ export function createFighterState(
     dodgeChainTimer: 0,
     perfectDodged: false,
     dodgeCounter: false,
+    lastHand: '',
+    handTimer: 0,
     airJumpsLeft: stats.airJumps,
     airDodged: false,
     helpless: false,

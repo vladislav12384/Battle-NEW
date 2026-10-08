@@ -22,23 +22,59 @@ export const RULES = {
   /** Vertical velocity of a "launcher jump" (jump-cancel after a launcher hits). */
   highJumpVelocity: 13,
 
-  // ---------------------------------------------------------------- aiming
+  // ---------------------------------------------------------------- aiming & control
+  // The camera always belongs to the player. Attacks go where you look; aim
+  // assist only nudges the BODY (never the camera) by a few degrees toward an
+  // enemy that is already near your crosshair.
   lockOnRange: 25,
   lockOnCone: 60 * DEG,
-  /** Max turn speed toward a lock-on target in neutral states (rad/frame). */
+  /** Max turn speed toward a lock-on target (rad/frame). */
   lockTurnRate: 14 * DEG,
-  /** Auto-target (aim assist) cone and extra range on top of a move's reach + lunge. */
-  autoTargetCone: 45 * DEG,
-  autoTargetExtraRange: 1.5,
-  /** How fast you can steer during an attack without a target (rad/frame). */
-  attackTurnRate: 3 * DEG,
-  /** Default tracking during startup by move kind (rad/frame). */
-  defaultTracking: { light: 12 * DEG, heavy: 7 * DEG, special: 8 * DEG, super: 16 * DEG, throw: 10 * DEG },
-  /** Default lunge budget during startup by move kind (meters). */
-  defaultLunge: { light: 1.6, heavy: 2.4, special: 2.0, super: 4.0, throw: 1.2 },
+  /** Enemies within this cone around the crosshair can receive aim assist. */
+  assistCone: 25 * DEG,
+  /** Max body correction toward the assisted target (yaw / pitch). */
+  assistMaxYaw: 12 * DEG,
+  assistMaxPitch: 15 * DEG,
+  /** Extra range on top of a move's reach + lunge for picking the assist target. */
+  assistExtraRange: 1.2,
+  /** How fast the body follows the camera during an attack's startup, by kind (rad/frame). */
+  turnRate: { light: 30 * DEG, heavy: 14 * DEG, special: 10 * DEG, super: 20 * DEG, throw: 20 * DEG },
+  /** ...during active frames (you can drag a strike a little)... */
+  activeTurnRate: 5 * DEG,
+  /** ...and during recovery. */
+  recoveryTurnRate: 12 * DEG,
+  /** Turn speed while blocking or in blockstun: guards can be flanked. */
+  blockTurnRate: 5 * DEG,
+  /** Turn speed while staggered / in hitstun / recoiling. */
+  stunTurnRate: 8 * DEG,
+  /** Step-in budget toward the assisted target during startup, by kind (meters). */
+  defaultLunge: { light: 0.7, heavy: 1.0, special: 0.8, super: 3.5, throw: 0.8 },
+  /** Holding forward while attacking adds this much step-in. */
+  lungeForwardBonus: 0.5,
   /** Lunge stops when the gap shrinks to this fraction of the move's reach. */
   lungeReachFraction: 0.7,
   maxPitch: 50 * DEG,
+  /** Movement allowed during attacks, as a fraction of walk speed, by kind. */
+  defaultMobility: { light: 0.5, heavy: 0.25, special: 0.2, super: 0, throw: 0.3 },
+  /** Mobility multiplier on active frames. */
+  activeMobilityScale: 0.5,
+
+  // ---------------------------------------------------------------- free-form combos
+  /** Light/heavy strikes chain into any strike right after their active frames on contact... */
+  /** ...and this many frames later on whiff (lights only; heavies need contact). */
+  flowWhiffDelay: 3,
+  /** Hits remembered for stale-move tracking. */
+  staleWindow: 4,
+  /** Hitstun lost per repeat of the same family within the window... */
+  staleHitstunStep: 0.25,
+  staleHitstunMin: 0.4,
+  /** ...and damage lost. */
+  staleDamageStep: 0.1,
+  staleDamageMin: 0.6,
+  /** Heavies can be feinted with BLOCK until this many frames before their first active frame. */
+  feintLock: 3,
+  /** Straights stop alternating hands after this long without a hand strike. */
+  handResetFrames: 45,
 
   // ---------------------------------------------------------------- guard
   /** Half-angle of the guard arc in front of a fighter. Hits from outside it ignore blocks. */
@@ -135,4 +171,4 @@ export const RULES = {
   koRespawnFrames: 180,
 } as const;
 
-export type MoveKindKey = keyof typeof RULES.defaultTracking;
+export type MoveKindKey = keyof typeof RULES.turnRate;
