@@ -14,6 +14,7 @@
  *   parry   - deflects every attack with perfect timing (chance-based)
  *   dodge   - sidesteps attacks at the last moment
  *   fighter - full AI: footsies, strings, launch combos, defense, escapes
+ *   drill   - training partner: walks up and repeats one attack (setDrill)
  */
 import { chainWindowStart } from '../fighter';
 import { Button, type Dir, type InputFrame, neutralInput, type Swipe, swipeCode } from '../input';
@@ -25,7 +26,7 @@ import type { Simulation } from '../simulation';
 import type { FighterState } from '../state';
 import type { MoveDef, StrikeLine } from '../types';
 
-export type BotMode = 'idle' | 'block' | 'parry' | 'dodge' | 'fighter';
+export type BotMode = 'idle' | 'block' | 'parry' | 'dodge' | 'fighter' | 'drill';
 export type BotLevel = 'easy' | 'normal' | 'hard';
 
 export interface BotConfig {
@@ -212,6 +213,9 @@ export class Bot {
   private reactFrames = 0;
   /** Extra frames to wait before the next chained press (timing mistake). */
   private late = 0;
+  /** Drill mode: the plan repeated and the pause between repetitions (frames). */
+  private drillPlan = 'haymaker';
+  private drillEvery = 120;
 
   constructor(
     readonly fighterId: number,
@@ -271,6 +275,8 @@ export class Bot {
         out.moveX = dashSide(threat.line, this.strafe);
         this.strafe = -this.strafe;
       }
+    } else if (mode === 'drill' && target) {
+      taps |= this.drill(sim, f, target, out);
     } else if (mode === 'fighter' && target) {
       const d = this.fight(sim, f, target, threat, out);
       held |= d.held;
@@ -601,8 +607,29 @@ export class Bot {
   }
 
   private rollCooldown(): number {
+    if (this.config.mode === 'drill') return this.drillEvery;
     const [lo, hi] = this.config.cooldown;
     return lo + Math.floor(nextRandom(this.rng) * (hi - lo + 1));
+  }
+
+  /** Drill mode: repeat `plan` (see PLANS) every `every` frames. */
+  setDrill(plan: string, every: number): void {
+    this.config.mode = 'drill';
+    this.drillPlan = PLANS[plan] ? plan : 'haymaker';
+    this.drillEvery = every;
+    this.plan = [];
+    this.cooldown = 60;
+  }
+
+  /** Walk into range and repeat the drill attack; no defense. Returns buttons to tap. */
+  private drill(sim: Simulation, f: FighterState, target: FighterState, out: InputFrame): number {
+    if (this.plan.length > 0) return this.runPlan(sim, f);
+    const dist = hDistance(f.pos, target.pos);
+    if (f.state !== 'ground') return 0;
+    out.moveY = dist > 1.7 ? 0.8 : dist < 1.1 ? -0.5 : 0;
+    if (--this.cooldown > 0 || dist > 2.2) return 0;
+    this.startPlan(this.drillPlan);
+    return this.runPlan(sim, f);
   }
 
   /** Switches difficulty, keeping the mode. */

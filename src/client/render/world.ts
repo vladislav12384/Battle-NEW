@@ -1,5 +1,52 @@
 /** Scene setup: renderer, arena geometry, lights, projectiles and the hitbox debug overlay. */
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+/**
+ * Impact pass: a radial zoom blur and a chromatic split around the point of a
+ * big hit, for a few frames. `strength` decays from the game.
+ */
+const ImpactShader = {
+  uniforms: {
+    tDiffuse: { value: null as THREE.Texture | null },
+    center: { value: new THREE.Vector2(0.5, 0.5) },
+    strength: { value: 0 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 center;
+    uniform float strength;
+    varying vec2 vUv;
+    void main() {
+      vec2 d = vUv - center;
+      if (strength <= 0.001) {
+        gl_FragColor = texture2D(tDiffuse, vUv);
+        return;
+      }
+      vec3 acc = vec3(0.0);
+      float total = 0.0;
+      for (int i = 0; i < 10; i++) {
+        float t = float(i) / 9.0;
+        float w = 1.0 - t * 0.6;
+        vec2 uv = vUv - d * t * 0.09 * strength;
+        acc.r += texture2D(tDiffuse, uv + d * 0.012 * strength).r * w;
+        acc.g += texture2D(tDiffuse, uv).g * w;
+        acc.b += texture2D(tDiffuse, uv - d * 0.012 * strength).b * w;
+        total += w;
+      }
+      gl_FragColor = vec4(acc / total, 1.0);
+    }`,
+};
 import { invulnerability } from '../../core/fighterUtil';
 import { hitboxCapsule, hurtCapsule, inFrames, movePitch } from '../../core/moves';
 import type { ArenaDef } from '../../core/physics';
@@ -46,6 +93,9 @@ export class World {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
+  private readonly composer: EffectComposer;
+  private readonly bloom: UnrealBloomPass;
+  private readonly impact: ShaderPass;
   private readonly projectiles = new Map<number, THREE.Object3D>();
   private readonly debug = new THREE.Group();
   private readonly debugPool: THREE.Mesh[] = [];
@@ -88,7 +138,22 @@ export class World {
 
     this.buildArena(arena);
     this.scene.add(this.debug);
+
+    // Post-processing: bright sparks, trails and energy glow; impact blur on big hits.
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.45, 0.82);
+    this.composer.addPass(this.bloom);
+    this.impact = new ShaderPass(ImpactShader);
+    this.composer.addPass(this.impact);
+    this.composer.addPass(new OutputPass());
     this.resize();
+  }
+
+  /** Radial impact blur centered on a screen point (0..1, y up), 0 = off. */
+  setImpact(x: number, y: number, strength: number): void {
+    this.impact.uniforms.center.value.set(x, y);
+    this.impact.uniforms.strength.value = strength;
   }
 
   private buildArena(arena: ArenaDef): void {
@@ -144,6 +209,8 @@ export class World {
     const w = window.innerWidth;
     const h = window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this.composer?.setSize(w, h);
+    this.bloom?.resolution.set(w / 2, h / 2);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -241,6 +308,6 @@ export class World {
   }
 
   render(): void {
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
   }
 }

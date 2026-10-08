@@ -41,6 +41,8 @@ export class FighterView {
   private readonly aura: THREE.Mesh;
   private readonly b: ReturnType<typeof bodyOf>;
   private flashT = 0;
+  private flashK = 1;
+  private readonly flashColor = new THREE.Color(1, 0.85, 0.7);
   private readonly tmpA = new THREE.Vector3();
   private readonly tmpB = new THREE.Vector3();
   private readonly tmpC = new THREE.Vector3();
@@ -158,9 +160,11 @@ export class FighterView {
     return { group, mat };
   }
 
-  /** Brief white flash when hit. */
-  hitFlash(): void {
+  /** Brief flash when hit (stronger for heavy blows, red on counter hits). */
+  hitFlash(strength = 1, color = 0xffd9b3): void {
     this.flashT = 1;
+    this.flashK = strength;
+    this.flashColor.set(color);
   }
 
   private placeSegment(mesh: THREE.Mesh, a: V3, b: V3, radius: number): void {
@@ -251,9 +255,10 @@ export class FighterView {
     // Hit flash and energy glow.
     this.flashT = Math.max(0, this.flashT - dt * 12);
     const g = pose.glow;
-    const fl = this.flashT * 0.28;
-    for (const m of this.mats) m.emissive.setRGB(fl, fl * 0.85, fl * 0.7);
-    this.skin.emissive.setRGB(g * 0.6 + fl, g * 0.45 + fl * 0.85, g * 0.15 + fl * 0.7);
+    const fl = this.flashT * 0.28 * this.flashK;
+    const fc = this.flashColor;
+    for (const m of this.mats) m.emissive.setRGB(fl * fc.r, fl * fc.g, fl * fc.b);
+    this.skin.emissive.setRGB(g * 0.6 + fl * fc.r, g * 0.45 + fl * fc.g, g * 0.15 + fl * fc.b);
     const aMat = this.aura.material as THREE.MeshBasicMaterial;
     aMat.opacity = firstPerson ? 0 : g * 0.18;
     toThree(j.chest, this.aura.position).add(toThree(j.hip, this.tmpA)).multiplyScalar(0.5);

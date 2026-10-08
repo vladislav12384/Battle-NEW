@@ -63,6 +63,10 @@ function begin(): void {
 }
 
 document.getElementById('play')!.addEventListener('click', begin);
+document.getElementById('learn')!.addEventListener('click', () => {
+  game.startTutorial();
+  begin();
+});
 canvas.addEventListener('click', () => {
   if (!game.input.locked && !demo) begin();
 });

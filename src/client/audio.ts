@@ -23,7 +23,9 @@ export type Sfx =
   | 'mash'
   | 'beat'
   | 'poise'
-  | 'impact';
+  | 'impact'
+  | 'slap'
+  | 'thump';
 
 export class Audio {
   private ctx: AudioContext | null = null;
@@ -138,6 +140,16 @@ export class Audio {
       case 'poise':
         this.tone('square', 220, 160, 0.16, 0.18);
         this.hiss('bandpass', 2500, 1.2, 0.25, 0.12);
+        break;
+      case 'slap':
+        // Knuckles on a face: a dry, sharp crack.
+        this.hiss('bandpass', 3200 + Math.random() * 800, 1.6, 0.35 * k, 0.045);
+        this.tone('triangle', 420, 180, 0.15 * k, 0.06);
+        break;
+      case 'thump':
+        // Into the body: a deep, padded thud.
+        this.tone('sine', 95 + Math.random() * 15, 45, 0.55 * k, 0.18);
+        this.hiss('lowpass', 500, 0.7, 0.3 * k, 0.12, 150);
         break;
       case 'impact':
         // Anime impact frame: a sharp crack over the boom.

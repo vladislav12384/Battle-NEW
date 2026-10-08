@@ -15,6 +15,7 @@ import { Simulation } from '../core/simulation';
 import type { FighterState, GameEvent } from '../core/state';
 import { Audio } from './audio';
 import { Hud, type ThreatMark } from './hud';
+import { Coach, moveName, nextStrikes, onBeatWindow, Tutorial } from './tutorial';
 import { InputDevice } from './input';
 import { FighterView, toThree } from './render/fighterView';
 import { Fx } from './render/fx';
@@ -42,6 +43,7 @@ const DUMMY_LABEL: Record<BotMode, string> = {
   block: 'всегда блок',
   parry: 'парирует всё',
   dodge: 'уклоняется',
+  drill: 'тренажёр',
 };
 
 interface ViewEntry {
@@ -56,6 +58,8 @@ interface ViewEntry {
   tell: { limb: string; color: number; size: number; heavy: boolean } | null;
   /** Last dash frame that left an afterimage. */
   ghostFrame: number;
+  /** Squash & stretch of the whole body on impact. */
+  squash: Spring;
 }
 
 interface Ghost {
@@ -112,6 +116,8 @@ export class Game {
     thirdPerson: false,
     dummyMode: 'fighter' as BotMode,
     level: 'normal' as BotLevel,
+    /** Next-strike hints and coach tips. */
+    hints: true,
     allies: 0,
     enemies: 1,
   };
@@ -127,6 +133,14 @@ export class Game {
   private ghosts: Ghost[] = [];
   /** Remaining seconds of an anime "impact frame" (inverted picture). */
   private impactFrame = 0;
+  /** Tutorial course (null = free training). */
+  tutorial: Tutorial | null = null;
+  private readonly coach = new Coach();
+  private tipText: string | null = null;
+  /** A heavy blow is winding up at the player (from the threat indicator). */
+  private threatHeavy = false;
+  /** Radial impact blur: screen center (0..1) and strength, decays every frame. */
+  private blur = { x: 0.5, y: 0.5, k: 0 };
   /** Brief world slow-down (perfect dodge, K.O.): seconds left and speed. */
   private dilation = { t: 0, scale: 1 };
   /** Debug/tooling hook: drives the local player with a script instead of the devices. */
@@ -195,6 +209,82 @@ export class Game {
     this.bots.set(f.id, bot);
   }
 
+  /** Starts the tutorial course from the first lesson. */
+  startTutorial(): void {
+    this.tutorial = new Tutorial();
+    this.applyLesson();
+  }
+
+  stopTutorial(): void {
+    this.tutorial = null;
+    this.hud.lesson(null);
+    this.resetScenario();
+  }
+
+  /** Sets up the arena and the training partner for the current lesson. */
+  private applyLesson(): void {
+    const t = this.tutorial;
+    if (!t || t.finished) return;
+    const setup = t.lesson.setup;
+    this.settings.enemies = 1;
+    this.settings.allies = 0;
+    this.resetScenario();
+    // The partner waits right in front of the player.
+    const me = this.player;
+    for (const f of this.sim.state.fighters) {
+      if (!me || f.team !== 1) continue;
+      f.pos = vec3(me.pos.x, 0, me.pos.z - 2.6);
+      f.yaw = Math.PI;
+    }
+    if (me) me.yaw = 0;
+    this.input.yaw = 0;
+    this.input.pitch = 0;
+    for (const [id, bot] of this.bots) {
+      if (this.sim.fighter(id)?.team !== 1) continue;
+      bot.setLevel(setup.real ? this.settings.level : 'normal');
+      if (setup.bot === 'drill') bot.setDrill(setup.drill ?? 'haymaker', setup.drillEvery ?? 120);
+      else bot.setMode(setup.bot);
+    }
+    this.hud.callout(t.lesson.title, 'info');
+  }
+
+  /** Lesson bookkeeping each tick. */
+  private tutorialTick(events: GameEvent[]): void {
+    const t = this.tutorial;
+    if (!t) return;
+    const me = this.player;
+    const res = t.feed(events, { sim: this.sim, me: this.playerId });
+    if (res === 'progress') this.audio.play('beat', 1.3);
+    if (res === 'complete') {
+      this.hud.callout('ОТЛИЧНО!', 'green big');
+      this.audio.play('perfect');
+    }
+    if (t.doneFor > 100) {
+      if (t.next()) this.applyLesson();
+      else {
+        this.hud.callout('ОБУЧЕНИЕ ПРОЙДЕНО!', 'gold big');
+        this.tutorial = null;
+        this.hud.lesson(null);
+        return;
+      }
+    }
+    const lesson = t.lesson;
+    if (!lesson.setup.real) {
+      // Practice never ends in a knockout.
+      for (const f of this.sim.state.fighters) f.health = Math.max(f.health, this.sim.statsOf(f).maxHealth * 0.3);
+    }
+    if (lesson.setup.fullBurst && me && me.combo.hits === 0) me.burst = RULES.burstMax;
+    this.hud.lesson({
+      index: t.index,
+      count: t.lessons.length,
+      title: lesson.title,
+      text: lesson.text,
+      progress: t.progress,
+      goal: lesson.goal,
+      done: t.doneFor >= 0,
+    });
+  }
+
   /** Difficulty of enemy bots (applies to the ones already fighting too). */
   setLevel(level: BotLevel): void {
     this.settings.level = level;
@@ -237,6 +327,20 @@ export class Game {
         break;
       case 'KeyV':
         this.settings.thirdPerson = !this.settings.thirdPerson;
+        break;
+      case 'KeyT':
+        if (this.tutorial) this.stopTutorial();
+        else this.startTutorial();
+        break;
+      case 'Enter':
+        if (this.tutorial && this.tutorial.doneFor < 0) {
+          if (this.tutorial.next()) this.applyLesson();
+          else this.stopTutorial();
+        }
+        break;
+      case 'Digit9':
+        this.settings.hints = !this.settings.hints;
+        this.hud.callout(`Подсказки: ${this.settings.hints ? 'вкл' : 'выкл'}`, 'info');
         break;
       case 'Digit8': {
         const next = LEVELS[(LEVELS.indexOf(this.settings.level) + 1) % LEVELS.length];
@@ -294,6 +398,7 @@ export class Game {
           yaw: new Spring(f.yaw),
           tell: null,
           ghostFrame: -1,
+          squash: new Spring(0),
         };
         e.mem.lastX = f.pos.x;
         e.mem.lastZ = f.pos.z;
@@ -332,6 +437,9 @@ export class Game {
     }
     this.trackAdvantage(events);
     for (const e of events) this.present(e);
+    this.tutorialTick(events);
+    const tip = this.settings.hints && !this.tutorial ? this.coach.update(sim, this.player, events, this.threatHeavy) : null;
+    this.tipText = tip?.text ?? null;
   }
 
   private trackAdvantage(events: GameEvent[]): void {
@@ -385,6 +493,7 @@ export class Game {
       const local = { x: dir.x * c - dir.z * s, y: dir.y, z: -dir.x * s - dir.z * c };
       const high = point.y - v.pos.y > chestHeight(this.sim.statsOf(v)) - 0.05;
       hitReaction(ve.mem, local, high, strength);
+      ve.squash.v += 5 * Math.min(1.6, strength);
     }
     const ae = this.views.get(attackerId);
     if (ae) impactRecoil(ae.mem, strength * 0.6);
@@ -402,13 +511,37 @@ export class Game {
         const color = e.effect === 'energy' ? 0x66ccff : e.effect === 'burst' ? 0xffffff : e.counter ? 0xff4444 : 0xffc04d;
         const attacker = this.sim.fighter(e.attacker);
         const dir = attacker ? new THREE.Vector3(at.x - attacker.pos.x, 0.3, at.z - attacker.pos.z).normalize() : undefined;
-        fx.spark(at, { color, count: heavy ? 40 : 18, speed: heavy ? 9 : 6, size: heavy ? 0.14 : 0.1, dir, spread: 0.9 });
-        fx.spark(at, { color: 0xffffff, count: 8, speed: 3, size: 0.08, life: 0.15 });
-        fx.flash(at, color, heavy ? 1.6 : 0.9);
-        if (heavy) fx.ring(at, color, 2.2, 0.25);
+        const victim = this.sim.fighter(e.victim);
+        const head = !!victim && e.point.y - victim.pos.y > chestHeight(this.sim.statsOf(victim)) + 0.05;
+        fx.spark(at, { color, count: heavy ? 46 : 20, speed: heavy ? 10 : 6.5, size: heavy ? 0.15 : 0.1, dir, spread: 0.9 });
+        fx.spark(at, { color: 0xffffff, count: 10, speed: 3.5, size: 0.08, life: 0.15 });
+        // Anime hit star at the point of contact, a second one behind it on heavy blows.
+        // Right in front of the camera (first person) they are scaled down so the target stays visible.
+        const near = Math.min(1, Math.max(0.42, this.world.camera.position.distanceTo(at) / 2.4));
+        fx.star(at, e.counter ? 0xff5050 : heavy ? 0xffe0a0 : 0xfff4d6, (heavy ? 1.5 : 0.75) * near, heavy ? 0.2 : 0.12);
+        if (heavy) fx.star(at, color, 2.4 * near, 0.26);
+        fx.flash(at, color, (heavy ? 1.8 : 1.0) * near);
+        // Pressure wave pushed out of the hit along the knockback.
+        const kdir = new THREE.Vector3(e.dir.x, e.dir.y, e.dir.z);
+        if (kdir.lengthSq() < 1e-4) kdir.set(0, 0, 1);
+        if (heavy || e.counter) {
+          fx.shock(at, kdir, e.counter ? 0xff7070 : 0xffffff, heavy ? 2.6 : 1.8, 0.3);
+          fx.shock(at.clone().addScaledVector(kdir, 0.35), kdir, color, heavy ? 1.7 : 1.2, 0.22, 0.6);
+        }
+        if (head && (heavy || e.counter)) {
+          // Spit / sweat spray flying with the blow.
+          fx.spark(at, { color: 0xdcecff, count: 14, speed: 4.5, size: 0.05, gravity: 9, dir: kdir, spread: 0.5, life: 0.5 });
+        }
+        if (victim && victim.grounded && e.force >= 5) {
+          // Feet dragged across the floor.
+          const feet = new THREE.Vector3(victim.pos.x, 0.08, victim.pos.z);
+          fx.spark(feet, { color: 0xa09484, count: 16, speed: 2.5, size: 0.16, gravity: 4, dir: new THREE.Vector3(-kdir.x, 0.4, -kdir.z), spread: 0.8, life: 0.55 });
+          if (e.force >= 9) fx.shock(feet, new THREE.Vector3(0, 1, 0), 0xc8beb0, 1.6, 0.35, 0.5);
+        }
         sfx.play(heavy ? 'hitHeavy' : 'hitLight', this.nearCamera(at) * (heavy ? 1.2 : 1));
+        sfx.play(head ? 'slap' : 'thump', this.nearCamera(at) * (heavy ? 1.2 : 0.8));
         if (heavy || e.counter || e.hitstop >= 14) sfx.play('boom', this.nearCamera(at) * Math.min(1.4, e.force / 8 + 0.4));
-        this.views.get(e.victim)?.view.hitFlash();
+        this.views.get(e.victim)?.view.hitFlash(heavy ? 1.7 : 1, e.counter ? 0xff4a4a : 0xffd9b3);
         // Weight of the hit for presentation: knockback force, freeze length, counter.
         const power = Math.min(1.6, e.force / 10 + e.hitstop / 20 + (e.counter ? 0.5 : 0));
         const mine = e.attacker === me || e.victim === me;
@@ -416,7 +549,11 @@ export class Game {
         if (e.damage > 0) hud.damageNumber(e.point, e.damage, e.victim === me ? 'taken' : e.counter ? 'counter' : ally ? 'dealt' : 'taken');
         if (mine && (heavy || e.counter || e.hitstop >= 14)) {
           const sp = this.project(e.point);
-          if (sp) hud.impact(sp.x, sp.y, power, e.counter ? 'rgba(255,120,120,0.95)' : 'rgba(255,255,255,0.9)');
+          if (sp) {
+            hud.impact(sp.x, sp.y, power, e.counter ? 'rgba(255,120,120,0.95)' : 'rgba(255,255,255,0.9)');
+            // Radial zoom blur + chromatic split centered on the hit.
+            this.blur = { x: sp.x / window.innerWidth, y: 1 - sp.y / window.innerHeight, k: Math.min(1, 0.45 + power * 0.35) };
+          }
           if (e.hitstop >= 16) hud.flash('rgba(255,255,255,1)', 0.1 + power * 0.06);
         }
         if (e.attacker === me) {
@@ -466,8 +603,9 @@ export class Game {
       case 'block': {
         const at = this.worldPoint(e.point);
         if (e.attacker === me) hud.beatCue();
-        fx.spark(at, { color: 0x66aaff, count: 12, speed: 5, size: 0.08 });
+        fx.spark(at, { color: 0x66aaff, count: 14, speed: 5, size: 0.08 });
         fx.flash(at, 0x4488ff, 0.8, 0.1);
+        fx.star(at, 0x8fc4ff, 0.7, 0.1);
         sfx.play('block', this.nearCamera(at));
         if (e.chip > 0 && this.sim.fighter(e.attacker)?.team === 0) hud.damageNumber(e.point, e.chip, 'chip');
         const vb = this.views.get(e.victim);
@@ -483,6 +621,9 @@ export class Game {
         fx.spark(at, { color: 0x99ffff, count: 40, speed: 10, size: 0.1, life: 0.4 });
         fx.flash(at, 0xccffff, 2.2, 0.18);
         fx.ring(at, 0x88ffff, 3, 0.35);
+        fx.star(at, 0xbffcff, 2.2, 0.22);
+        const ap0 = this.sim.fighter(e.attacker);
+        if (ap0) fx.shock(at, new THREE.Vector3(ap0.pos.x - at.x, 0, ap0.pos.z - at.z).normalize(), 0x9ffcff, 2.4, 0.32);
         sfx.play('parry');
         const ap = this.views.get(e.attacker);
         if (ap) impactRecoil(ap.mem, 1.6);
@@ -498,6 +639,7 @@ export class Game {
         const at = this.worldPoint(e.point);
         fx.spark(at, { color: 0xff8833, count: 50, speed: 11, size: 0.12 });
         fx.ring(at, 0xff8833, 3.5, 0.4);
+        fx.star(at, 0xffb066, 2.6, 0.25);
         sfx.play('guardBreak');
         if (e.victim === me || e.attacker === me) hud.callout('GUARD BREAK', 'orange');
         break;
@@ -521,6 +663,7 @@ export class Game {
         fx.spark(at, { color: 0xffffff, count: 50, speed: 12, size: 0.1, life: 0.4 });
         fx.flash(at, 0xffffff, 2.4, 0.2);
         fx.ring(at, 0xffffff, 3.2, 0.3);
+        fx.star(at, 0xffffff, 2.2, 0.2);
         sfx.play('clash');
         if (e.a === me || e.b === me) {
           hud.callout('CLASH!', 'white');
@@ -560,7 +703,7 @@ export class Game {
         const m = f ? this.sim.moveById(f.charId, e.move) : null;
         if (f) sfx.play(m && m.kind !== 'light' ? 'whooshHeavy' : 'whoosh', this.nearCamera(f.pos) * 0.8);
         if (e.fighter === me && m) {
-          hud.strike(m.name, f?.stringPos ?? 1);
+          hud.strike(moveName(m.id, m.name), f?.stringPos ?? 1);
           if (f && f.rhythm === 0) hud.rhythm(0);
         }
         // Enemy tell: a glint on the striking limb as the wind-up starts.
@@ -719,6 +862,9 @@ export class Game {
       }
       const jitter = f.shake > 0 ? 0.035 : 0;
       e.view.root.position.set(x + (Math.random() - 0.5) * jitter, y, z + (Math.random() - 0.5) * jitter);
+      // Squash on impact, stretch on the rebound (not for our own first-person body).
+      const sq = fp ? 0 : Math.max(-0.12, Math.min(0.12, e.squash.step(0, dt, 22, 0.3)));
+      e.view.root.scale.set(1 + sq * 0.6, 1 - sq, 1 + sq * 0.6);
       e.view.root.rotation.y = yaw;
       advanceWalk(e.mem, x, z, stats, f.running);
       const target = computeTargets(f, stats, sim.moveOf(f), e.mem, this.time, frac, fp);
@@ -759,7 +905,7 @@ export class Game {
             : (['hip', 'chest'] as const);
           const base = e.view.root.localToWorld(toThree(joints[pair[0]]));
           const tip = e.view.root.localToWorld(toThree(joints[pair[1]]));
-          this.fx.trailSample(`${f.id}:${limb}`, base, tip, color);
+          this.fx.trailSample(`${f.id}:${limb}`, base, tip, color, !fp && sim.moveOf(f)?.kind !== 'light');
         }
       }
       if (e.tell) {
@@ -802,7 +948,18 @@ export class Game {
     const shake = this.fx.update(dt);
     this.updateCamera(me, headWorld, meJoints, shake, dt);
     this.cameraOverride?.(this.world.camera, this);
-    this.hud.threats(me && me.state !== 'ko' ? this.computeThreats(me) : []);
+    const threats = me && me.state !== 'ko' ? this.computeThreats(me) : [];
+    this.threatHeavy = threats.some((t) => t.kind !== 'light');
+    this.hud.threats(threats);
+    // Learning aids: what the next press gives, and the coach's tip.
+    const next = me && (this.settings.hints || this.tutorial) ? nextStrikes(sim, me) : null;
+    this.hud.nextHint(
+      next?.light ? moveName(next.light) : null,
+      next?.heavy ? moveName(next.heavy) : null,
+      !!next?.jump,
+      !!me && onBeatWindow(sim, me),
+    );
+    this.hud.tip(this.tipText);
     this.hud.updateEffects(dt, (p) => this.project(p), !!me?.exhausted);
     // Slowed-time tint while an enemy we perfect-dodged is exposed.
     let exposed = 0;
@@ -810,6 +967,8 @@ export class Game {
     this.hud.witch(Math.min(1, exposed / RULES.dodge.exposeFrames) * 0.85);
     // Anime impact frame: an inverted, high-contrast flash of the picture.
     this.impactFrame = Math.max(0, this.impactFrame - dt);
+    this.blur.k = Math.max(0, this.blur.k - dt * 5.5);
+    this.world.setImpact(this.blur.x, this.blur.y, this.blur.k);
     this.canvas.style.filter = this.impactFrame > 0 ? 'invert(1) grayscale(1) contrast(1.8)' : '';
 
     // Lock-on marker and HUD target.
@@ -824,6 +983,7 @@ export class Game {
     this.hud.update(sim, me, target, {
       dummyMode: DUMMY_LABEL[this.settings.dummyMode],
       level: BOT_LEVEL_LABEL[this.settings.level],
+      hints: this.settings.hints,
       hitboxes: this.settings.hitboxes,
       slowmo: this.settings.slowmo,
       infiniteMeter: this.settings.infiniteMeter,

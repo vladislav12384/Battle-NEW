@@ -3,6 +3,7 @@ import { RULES } from '../core/rules';
 import type { Simulation } from '../core/simulation';
 import type { FighterState } from '../core/state';
 import type { CharacterDef } from '../core/types';
+import { MOVE_NAMES } from './tutorial';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', parent?: HTMLElement): HTMLElementTagNameMap[K] => {
   const e = document.createElement(tag);
@@ -88,6 +89,7 @@ const THREAT_COLOR: Record<ThreatMark['kind'], [number, number, number]> = {
 export interface TrainingInfo {
   dummyMode: string;
   level: string;
+  hints: boolean;
   hitboxes: boolean;
   slowmo: boolean;
   infiniteMeter: boolean;
@@ -120,6 +122,12 @@ export class Hud {
   private threatMarks: ThreatMark[] = [];
   private beat = 0;
   private readonly rhythmEl: HTMLDivElement;
+  private readonly hintEl: HTMLDivElement;
+  private hintKey = '';
+  private readonly tipEl: HTMLDivElement;
+  private tipKey = '';
+  private readonly lessonEl: HTMLDivElement;
+  private lessonKey = '';
   private floaters: { el: HTMLDivElement; t: number; world: { x: number; y: number; z: number } }[] = [];
   readonly moveList: HTMLDivElement;
   private comboTimer = 0;
@@ -138,6 +146,9 @@ export class Hud {
     this.lockMarker = el('div', 'lock', this.root);
     this.strikeEl = el('div', 'strike', this.root);
     this.rhythmEl = el('div', 'rhythm', this.root);
+    this.hintEl = el('div', 'nexthint', this.root);
+    this.tipEl = el('div', 'tip', this.root);
+    this.lessonEl = el('div', 'lesson hidden', this.root);
     this.combo = el('div', 'combo', this.root);
     this.comboHits = el('div', 'hits', this.combo);
     this.comboInfo = el('div', 'info', this.combo);
@@ -173,6 +184,58 @@ export class Hud {
   /** Blue "slowed time" tint while the enemy you perfect-dodged is exposed (0..1). */
   witch(level: number): void {
     this.witchEl.style.opacity = String(level);
+  }
+
+  /** What each attack button gives next in the current string (null hides it). */
+  nextHint(light: string | null, heavy: string | null, jump: boolean, onBeat: boolean): void {
+    const key = light || heavy || jump ? `${light}|${heavy}|${jump}|${onBeat}` : '';
+    if (key === this.hintKey) return;
+    this.hintKey = key;
+    if (!key) {
+      this.hintEl.classList.remove('on');
+      return;
+    }
+    const parts: string[] = [];
+    if (jump) parts.push('<span class="jump"><kbd>Space</kbd> прыжок следом</span>');
+    if (light) parts.push(`<span><kbd>ЛКМ</kbd> ${light}</span>`);
+    if (heavy) parts.push(`<span><kbd>ПКМ</kbd> ${heavy}</span>`);
+    this.hintEl.innerHTML = parts.join('');
+    this.hintEl.classList.add('on');
+    this.hintEl.classList.toggle('beat', onBeat);
+  }
+
+  /** Contextual coach tip at the bottom of the screen (null hides it). */
+  tip(text: string | null): void {
+    const key = text ?? '';
+    if (key === this.tipKey) return;
+    this.tipKey = key;
+    if (!text) {
+      this.tipEl.classList.remove('on');
+      return;
+    }
+    this.tipEl.innerHTML = text;
+    this.tipEl.classList.remove('on');
+    void this.tipEl.offsetWidth;
+    this.tipEl.classList.add('on');
+  }
+
+  /** Tutorial lesson card (null hides it). */
+  lesson(info: { index: number; count: number; title: string; text: string; progress: number; goal: number; done: boolean } | null): void {
+    this.root.classList.toggle('tutorial', !!info);
+    if (!info) {
+      this.lessonKey = '';
+      this.lessonEl.classList.add('hidden');
+      return;
+    }
+    const key = `${info.index}|${info.progress}|${info.done}`;
+    if (key === this.lessonKey) return;
+    this.lessonKey = key;
+    const dots = Array.from({ length: info.goal }, (_, i) => `<i class="${i < info.progress ? 'got' : ''}"></i>`).join('');
+    this.lessonEl.className = `lesson${info.done ? ' done' : ''}`;
+    this.lessonEl.innerHTML = `
+      <div class="head"><span>ОБУЧЕНИЕ ${info.index + 1}/${info.count}</span><b>${info.title}</b><span class="dots">${dots}</span></div>
+      <div class="body">${info.done ? '<b class="ok">Отлично!</b> Дальше…' : info.text}</div>
+      <div class="foot"><kbd>Enter</kbd> пропустить урок · <kbd>T</kbd> выйти из обучения</div>`;
   }
 
   /** Incoming strikes to draw this frame. */
@@ -395,6 +458,7 @@ export class Hud {
       <div class="title">ПОЛИГОН</div>
       <div>Преимущество по кадрам: ${adv}</div>
       <div><kbd>1</kbd> хитбоксы: <b>${info.hitboxes ? 'вкл' : 'выкл'}</b></div>
+      <div><kbd>T</kbd> обучение · <kbd>9</kbd> подсказки: <b>${info.hints ? 'вкл' : 'выкл'}</b></div>
       <div><kbd>8</kbd> сложность: <b>${info.level}</b></div>
       <div><kbd>2</kbd> манекен: <b>${info.dummyMode}</b></div>
       <div><kbd>3</kbd> замедление: <b>${info.slowmo ? '25%' : 'выкл'}</b></div>
@@ -405,7 +469,7 @@ export class Hud {
   }
 
   buildMoveList(c: CharacterDef): void {
-    const name = (id: string): string => c.moves[id]?.name ?? id;
+    const name = (id: string): string => MOVE_NAMES[id] ?? c.moves[id]?.name ?? id;
     this.moveList.innerHTML = `
       <h2>${c.name} — как драться</h2>
       <p>Две кнопки атаки. Какой удар выйдет, зависит от того, <b>сколько ударов уже попало подряд</b>.
