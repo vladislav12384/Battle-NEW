@@ -222,18 +222,21 @@ export class FighterView {
       w.quaternion.setFromUnitVectors(UP, dir);
     });
 
-    // Feet: flat and forward when planted, pointed along the shin when kicking.
+    // Feet: planted feet pivot (toe yaw) and lift the heel; raised feet point along the shin.
     (['lFoot', 'rFoot'] as const).forEach((foot, i) => {
       const knee = foot === 'lFoot' ? j.lKnee : j.rKnee;
       const fm = this.feet[i];
       const pf = toThree(j[foot], this.tmpA);
       const shin = this.tmpB.copy(pf).sub(toThree(knee, this.tmpC)).normalize();
       const raised = Math.min(1, Math.max(0, (j[foot].y - 0.25) / 0.4));
-      const flat = new THREE.Vector3(0, 0, -1);
-      const pointDir = flat.clone().lerp(shin, raised).normalize();
+      const toe = foot === 'lFoot' ? -j.feet.lToe : j.feet.rToe;
+      const heel = Math.min(1, Math.max(0, foot === 'lFoot' ? j.feet.lHeel : j.feet.rHeel)) * (1 - raised);
+      // Flat direction turned by the pivot, pitched toes-down by the heel lift.
+      const flat = new THREE.Vector3(Math.sin(toe) * Math.cos(heel * 0.7), -Math.sin(heel * 0.7), -Math.cos(toe) * Math.cos(heel * 0.7));
+      const pointDir = flat.lerp(shin, raised).normalize();
       fm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), pointDir);
       fm.position.copy(pf).addScaledVector(pointDir, 0.07 * b.s);
-      fm.position.y += 0.045 * (1 - raised);
+      fm.position.y += (0.045 + heel * 0.07) * (1 - raised);
     });
 
     // Head: orientation from the skeleton's head rotation.

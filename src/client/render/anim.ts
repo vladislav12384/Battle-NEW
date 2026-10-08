@@ -16,11 +16,12 @@
  * All positions are in character-local space: x = right, y = up, z = forward,
  * relative to the feet. Real animation clips can replace this later.
  */
-import { chestHeight } from '../../core/moves';
+import { chestHeight, strikeLine } from '../../core/moves';
 import { clamp } from '../../core/math/vec3';
 import { RULES } from '../../core/rules';
 import type { FighterState } from '../../core/state';
 import type { CharacterStats, HitboxDef, LimbId, MoveDef } from '../../core/types';
+import { strikePose } from './strikes';
 
 export interface V3 {
   x: number;
@@ -28,20 +29,21 @@ export interface V3 {
   z: number;
 }
 
-const v = (x: number, y: number, z: number): V3 => ({ x, y, z });
-const add = (a: V3, b: V3): V3 => v(a.x + b.x, a.y + b.y, a.z + b.z);
-const sub = (a: V3, b: V3): V3 => v(a.x - b.x, a.y - b.y, a.z - b.z);
-const mul = (a: V3, s: number): V3 => v(a.x * s, a.y * s, a.z * s);
-const len = (a: V3): number => Math.hypot(a.x, a.y, a.z);
+export const v = (x: number, y: number, z: number): V3 => ({ x, y, z });
+export const add = (a: V3, b: V3): V3 => v(a.x + b.x, a.y + b.y, a.z + b.z);
+export const sub = (a: V3, b: V3): V3 => v(a.x - b.x, a.y - b.y, a.z - b.z);
+export const mul = (a: V3, s: number): V3 => v(a.x * s, a.y * s, a.z * s);
+export const len = (a: V3): number => Math.hypot(a.x, a.y, a.z);
 const dot = (a: V3, b: V3): number => a.x * b.x + a.y * b.y + a.z * b.z;
-const norm = (a: V3, fallback: V3 = v(0, 0, 1)): V3 => {
+export const norm = (a: V3, fallback: V3 = v(0, 0, 1)): V3 => {
   const l = len(a);
   return l > 1e-6 ? mul(a, 1 / l) : fallback;
 };
-const lerpV = (a: V3, b: V3, t: number): V3 => v(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+export const lerpV = (a: V3, b: V3, t: number): V3 => v(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
 const cross = (a: V3, b: V3): V3 => v(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-const easeOut = (t: number): number => 1 - (1 - t) ** 3;
-const easeInOut = (t: number): number => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+export const easeOut = (t: number): number => 1 - (1 - t) ** 3;
+export const easeIn = (t: number): number => t * t * t;
+export const easeInOut = (t: number): number => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 // ===========================================================================
 // Springs
@@ -101,13 +103,33 @@ export interface Pose {
   headYaw: number;
   headRoll: number;
   glow: number;
+  /** Extra hip yaw on top of the shoulders' (kicks turn the hips over). */
+  hipTurn: number;
+  /** Elbow placement: -1 tucked in front (uppercuts), 0 down, 1 raised out (hooks), 2 cocked high behind. */
+  lElbow: number;
+  rElbow: number;
+  /** Knee placement: 0 forward, 1 turned out to the side, -1 turned over (roundhouse). */
+  lKnee: number;
+  rKnee: number;
+  /** Foot pivot (yaw, + turns the toes outward) and heel lift (0..1). */
+  lToe: number;
+  rToe: number;
+  lHeel: number;
+  rHeel: number;
+  /** Whole-body spin around the vertical axis (spinning strikes); not sprung. */
+  spin: number;
   striking: LimbId[];
   /** Spring frequency per limb for this frame (snappy while striking). */
   stiff: Record<'lHand' | 'rHand' | 'lFoot' | 'rFoot' | 'body', number>;
 }
 
-type BodyKey = 'hipX' | 'hipY' | 'hipZ' | 'lean' | 'twist' | 'roll' | 'tiltPitch' | 'tiltRoll' | 'headPitch' | 'headYaw' | 'headRoll' | 'glow';
-const BODY_KEYS: BodyKey[] = ['hipX', 'hipY', 'hipZ', 'lean', 'twist', 'roll', 'tiltPitch', 'tiltRoll', 'headPitch', 'headYaw', 'headRoll', 'glow'];
+type BodyKey =
+  | 'hipX' | 'hipY' | 'hipZ' | 'lean' | 'twist' | 'roll' | 'tiltPitch' | 'tiltRoll' | 'headPitch' | 'headYaw' | 'headRoll' | 'glow'
+  | 'hipTurn' | 'lElbow' | 'rElbow' | 'lKnee' | 'rKnee' | 'lToe' | 'rToe' | 'lHeel' | 'rHeel';
+const BODY_KEYS: BodyKey[] = [
+  'hipX', 'hipY', 'hipZ', 'lean', 'twist', 'roll', 'tiltPitch', 'tiltRoll', 'headPitch', 'headYaw', 'headRoll', 'glow',
+  'hipTurn', 'lElbow', 'rElbow', 'lKnee', 'rKnee', 'lToe', 'rToe', 'lHeel', 'rHeel',
+];
 
 type ReactKey = 'headPitch' | 'headYaw' | 'headRoll' | 'lean' | 'twist' | 'roll' | 'hipZ' | 'guard';
 const REACT_KEYS: ReactKey[] = ['headPitch', 'headYaw', 'headRoll', 'lean', 'twist', 'roll', 'hipZ', 'guard'];
@@ -131,7 +153,7 @@ export function newAnimMemory(seed: number): AnimMemory {
   return { seed, phase: 0, lastX: 0, lastZ: 0, limbs: null, body, react };
 }
 
-interface Body {
+export interface Body {
   s: number;
   w: number;
   hipY: number;
@@ -182,6 +204,16 @@ function guardPose(b: Body): Pose {
     headYaw: 0,
     headRoll: 0,
     glow: 0,
+    hipTurn: 0,
+    lElbow: 0,
+    rElbow: 0,
+    lKnee: 0,
+    rKnee: 0,
+    lToe: 0.25,
+    rToe: 0.5,
+    lHeel: 0,
+    rHeel: 0.15,
+    spin: 0,
     striking: [],
     stiff: { lHand: IDLE, rHand: IDLE, lFoot: IDLE, rFoot: IDLE, body: 14 },
   };
@@ -401,7 +433,7 @@ export function computeTargets(
     }
     case 'attack': {
       if (!move) break;
-      attackPose(p, f, stats, b, move, fr);
+      attackPose(p, f, stats, b, move, fr, firstPerson, time);
       break;
     }
     case 'blockstun':
@@ -523,9 +555,27 @@ export function computeTargets(
   return p;
 }
 
-/** Strike poses: limbs follow the hitboxes, the body drives the strike. */
-function attackPose(p: Pose, f: FighterState, stats: CharacterStats, b: Body, move: MoveDef, fr: number): void {
+/** Feet tucked during aerial strikes that don't use them, and during rising moves. */
+function airFeet(p: Pose, f: FighterState, b: Body, move: MoveDef, feetUsed: boolean): void {
+  if (move.air && !feetUsed) {
+    p.lFoot = v(-0.14 * b.w, 0.38 * b.s, 0.14 * b.s);
+    p.rFoot = v(0.15 * b.w, 0.52 * b.s, -0.04 * b.s);
+  }
+  if (move.motion?.some((mo) => (mo.up ?? 0) > 0) && !f.grounded && !feetUsed) {
+    p.lFoot = v(-0.12 * b.w, 0.2 * b.s, -0.05);
+    p.rFoot = v(0.12 * b.w, 0.35 * b.s, 0.05);
+  }
+}
+
+/** Strike poses: choreographed styles (strikes.ts), else limbs follow the hitboxes. */
+function attackPose(p: Pose, f: FighterState, stats: CharacterStats, b: Body, move: MoveDef, fr: number, firstPerson: boolean, time: number): void {
   const frame = f.charging ? f.moveFrame : f.moveFrame + fr;
+  if (strikePose(p, f, stats, b, move, frame, strikeLine(move), firstPerson, time)) {
+    const feetUsed = move.hitboxes.some((h) => h.limb === 'lFoot' || h.limb === 'rFoot');
+    if (move.anim !== 'dragon') airFeet(p, f, b, move, feetUsed);
+    if (move.kind === 'super') p.glow = Math.max(p.glow, 0.8);
+    return;
+  }
   const pivot = chestHeight(stats);
   const pitch = move.pitchAim === false ? 0 : clamp(f.aimPitch, -RULES.maxPitch, RULES.maxPitch);
   const byLimb = new Map<LimbId, HitboxDef[]>();
@@ -630,19 +680,12 @@ function attackPose(p: Pose, f: FighterState, stats: CharacterStats, b: Body, mo
     p.roll = Math.sin(f.chargeFrames * 0.9) * 0.02 * c; // trembling with power
   }
   if (move.kind === 'super') p.glow = Math.max(p.glow, 0.8);
-  if (move.air) {
-    if (!byLimb.has('lFoot')) p.lFoot = v(-0.14 * b.w, 0.38 * b.s, 0.14 * b.s);
-    if (!byLimb.has('rFoot')) p.rFoot = v(0.15 * b.w, 0.52 * b.s, -0.04 * b.s);
-  }
+  airFeet(p, f, b, move, byLimb.has('lFoot') || byLimb.has('rFoot'));
   if (move.kind === 'throw') {
     const k = Math.sin(clamp(frame / (move.startup + move.active), 0, 1) * Math.PI);
     p.lHand = v(-0.15 * b.w, 1.3 * b.s, 0.4 + 0.15 * k);
     p.rHand = v(0.15 * b.w, 1.3 * b.s, 0.4 + 0.15 * k);
     p.lean = 0.25 * k;
-  }
-  if (move.motion?.some((mo) => (mo.up ?? 0) > 0) && !f.grounded) {
-    p.lFoot = v(-0.12 * b.w, 0.2 * b.s, -0.05);
-    p.rFoot = v(0.12 * b.w, 0.35 * b.s, 0.05);
   }
 }
 
@@ -743,9 +786,11 @@ export interface Joints {
   chestRight: V3;
   /** Head orientation relative to the body: pitch + nods down, yaw + left, roll + right. */
   headRot: { pitch: number; yaw: number; roll: number };
+  /** Foot pivots (yaw, spin included) and heel lifts for the foot meshes. */
+  feet: { lToe: number; rToe: number; lHeel: number; rHeel: number };
 }
 
-export type JointPoint = Exclude<keyof Joints, 'chestUp' | 'chestRight' | 'headRot'>;
+export type JointPoint = Exclude<keyof Joints, 'chestUp' | 'chestRight' | 'headRot' | 'feet'>;
 
 const POINT_KEYS: readonly JointPoint[] = [
   'hip', 'chest', 'neck', 'head', 'lShoulder', 'rShoulder', 'lElbow', 'rElbow', 'lHand', 'rHand',
@@ -784,6 +829,23 @@ function rotateAround(pt: V3, pivot: V3, pitch: number, roll: number): V3 {
   return v(x + pivot.x, y + pivot.y, z + pivot.z);
 }
 
+/** Where an elbow points (IK pole) for a given elbow placement (see Pose.lElbow). */
+function elbowPole(sd: number, e: number, right: V3, fwd: V3): V3 {
+  const at = (r: number, u: number, f: number): V3 => add(add(mul(right, sd * r), v(0, u, 0)), mul(fwd, f));
+  const down = at(0.7, -1, -0.3);
+  if (e < 0) return lerpV(down, at(0.15, -1, 0.8), Math.min(1, -e));
+  if (e <= 1) return lerpV(down, at(1, 0.35, -0.2), e);
+  return lerpV(at(1, 0.35, -0.2), at(0.45, 0.9, -0.7), Math.min(1, e - 1));
+}
+
+/** Where a knee points (IK pole) for a given knee placement (see Pose.lKnee). */
+function kneePole(sd: number, k: number, hipRight: V3, hipFwd: V3): V3 {
+  const at = (r: number, u: number, f: number): V3 => add(add(mul(hipRight, sd * r), v(0, u, 0)), mul(hipFwd, f));
+  const fwdPole = at(0.25, 0, 1);
+  if (k >= 0) return lerpV(fwdPole, at(1, 0.25, 0.35), Math.min(1, k));
+  return lerpV(fwdPole, at(-0.9, 0.55, 0.3), Math.min(1, -k));
+}
+
 /** Builds the full skeleton from an animated pose. */
 export function solveSkeleton(stats: CharacterStats, p: Pose): Joints {
   const b = bodyOf(stats);
@@ -804,15 +866,16 @@ export function solveSkeleton(stats: CharacterStats, p: Pose): Joints {
   const headDir = norm(add(up, add(mul(fwd, Math.sin(p.headPitch) * 0.8), mul(right, Math.sin(p.headRoll) * 0.8))));
   const head = add(neck, mul(headDir, 0.14 * b.s));
 
-  const lArm = ik(lShoulder, p.lHand, b.upperArm, b.foreArm, add(mul(right, -0.7), v(0, -1, -0.3)));
-  const rArm = ik(rShoulder, p.rHand, b.upperArm, b.foreArm, add(mul(right, 0.7), v(0, -1, -0.3)));
-  // Hips turn half as much as the shoulders.
-  const ht = p.twist * 0.45;
+  const lArm = ik(lShoulder, p.lHand, b.upperArm, b.foreArm, elbowPole(-1, p.lElbow, right, fwd));
+  const rArm = ik(rShoulder, p.rHand, b.upperArm, b.foreArm, elbowPole(1, p.rElbow, right, fwd));
+  // Hips turn half as much as the shoulders, plus their own turn (kicks).
+  const ht = p.twist * 0.45 + p.hipTurn;
   const hipRight = v(Math.cos(ht), 0, Math.sin(ht));
+  const hipFwd = v(-Math.sin(ht), 0, Math.cos(ht));
   const lHipJ = add(hip, add(mul(hipRight, -0.1 * b.w), v(0, -0.04, 0)));
   const rHipJ = add(hip, add(mul(hipRight, 0.1 * b.w), v(0, -0.04, 0)));
-  const lLeg = ik(lHipJ, p.lFoot, b.thigh, b.shin, v(-0.25, 0, 1));
-  const rLeg = ik(rHipJ, p.rFoot, b.thigh, b.shin, v(0.25, 0, 1));
+  const lLeg = ik(lHipJ, p.lFoot, b.thigh, b.shin, kneePole(-1, p.lKnee, hipRight, hipFwd));
+  const rLeg = ik(rHipJ, p.rFoot, b.thigh, b.shin, kneePole(1, p.rKnee, hipRight, hipFwd));
 
   const j: Joints = {
     hip,
@@ -835,10 +898,24 @@ export function solveSkeleton(stats: CharacterStats, p: Pose): Joints {
     chestRight: right,
     headRot: {
       pitch: p.lean + p.headPitch,
-      yaw: p.twist * 0.4 + p.headYaw,
+      yaw: p.twist * 0.4 + p.headYaw + p.spin,
       roll: p.roll + p.headRoll,
     },
+    feet: { lToe: p.lToe - p.spin, rToe: p.rToe + p.spin, lHeel: p.lHeel, rHeel: p.rHeel },
   };
+  if (p.spin !== 0) {
+    // Spinning strikes turn the whole body around the hips.
+    const c = Math.cos(p.spin);
+    const sn = Math.sin(p.spin);
+    const turn = (q: V3, px: number, pz: number): V3 => {
+      const x = q.x - px;
+      const z = q.z - pz;
+      return v(px + x * c + z * sn, q.y, pz + z * c - x * sn);
+    };
+    for (const k of POINT_KEYS) j[k] = turn(j[k], hip.x, hip.z);
+    j.chestUp = turn(j.chestUp, 0, 0);
+    j.chestRight = turn(j.chestRight, 0, 0);
+  }
   if (p.tiltPitch !== 0 || p.tiltRoll !== 0) {
     const pivot = v(0, hipY, 0);
     for (const k of POINT_KEYS) j[k] = rotateAround(j[k], pivot, p.tiltPitch, p.tiltRoll);

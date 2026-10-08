@@ -217,6 +217,11 @@ export interface MoveDef {
   poise?: boolean;
   /** Strike trajectory; derived from the first hitbox when omitted (see strikeLine). */
   line?: StrikeLine;
+  /**
+   * Animation style hint for the client ('hook', 'haymaker', 'roundhouse',
+   * 'spinBackfist'...). Derived from the limb and the trajectory when omitted.
+   */
+  anim?: string;
   cancels?: CancelDef[];
   jumpCancel?: { frames: [number, number]; on: 'hit' | 'contact'; high?: boolean };
   meterCost?: number;

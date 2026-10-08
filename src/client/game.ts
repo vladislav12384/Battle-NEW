@@ -700,12 +700,22 @@ export class Game {
       const target = computeTargets(f, stats, sim.moveOf(f), e.mem, this.time, frac, fp);
       const pose = animate(e.mem, target, dt);
       if (fp) {
-        // First-person viewmodel space: keep our own fists out of our face so a
-        // wind-up never fills the screen (visual only; hitboxes are unaffected).
-        const headZ = pose.hipZ + Math.sin(pose.lean) * 0.55;
+        // First-person viewmodel space: our own fists never fill the screen. A hand
+        // close to (or behind) the eyes is pushed out of the line of sight, so a
+        // wind-up cocked behind the head leaves the view and the strike sweeps back
+        // in (visual only; hitboxes are unaffected).
+        const eye = { x: pose.hipX, y: stats.eyeHeight + (pose.hipY - (0.95 * stats.height) / 1.8), z: pose.hipZ + Math.sin(pose.lean) * 0.55 };
         for (const hand of ['lHand', 'rHand'] as const) {
           const h = pose[hand];
-          pose[hand] = { x: h.x, y: Math.min(h.y, stats.eyeHeight - 0.15), z: Math.max(h.z, headZ + 0.36) };
+          const ahead = h.z - eye.z;
+          if (ahead >= 0.42) continue;
+          const clear = 0.16 + (0.42 - ahead) * 0.95;
+          const dx = h.x - eye.x;
+          const dy = h.y - eye.y;
+          const r = Math.hypot(dx, dy);
+          if (r >= clear) continue;
+          const k = r > 1e-3 ? clear / r : 0;
+          pose[hand] = r > 1e-3 ? { x: eye.x + dx * k, y: eye.y + dy * k, z: h.z } : { x: h.x + (hand === 'lHand' ? -clear : clear), y: h.y, z: h.z };
         }
       }
       e.pose = pose;

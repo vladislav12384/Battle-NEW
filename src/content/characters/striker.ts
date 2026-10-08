@@ -170,6 +170,7 @@ const uppercut: MoveDef = {
 
 const bodyBlow: MoveDef = {
   id: 'body_blow',
+  anim: 'bodyHook',
   name: 'Body Blow',
   kind: 'light',
   stamina: 10,
@@ -198,6 +199,7 @@ const bodyBlow: MoveDef = {
 
 const haymaker: MoveDef = {
   id: 'haymaker',
+  anim: 'haymaker',
   name: 'Haymaker (hold to charge)',
   kind: 'heavy',
   stamina: 20,
@@ -231,6 +233,7 @@ const haymaker: MoveDef = {
 
 const backfist: MoveDef = {
   id: 'spin_backfist',
+  anim: 'spinBackfist',
   name: 'Spinning Backfist',
   kind: 'heavy',
   stamina: 18,
@@ -254,6 +257,7 @@ const backfist: MoveDef = {
 
 const launcher: MoveDef = {
   id: 'rising_uppercut',
+  anim: 'launcher',
   name: 'Rising Uppercut (launcher)',
   kind: 'heavy',
   stamina: 16,
@@ -279,6 +283,7 @@ const launcher: MoveDef = {
 
 const hammer: MoveDef = {
   id: 'hammer',
+  anim: 'hammer',
   name: 'Hammer Fist',
   kind: 'heavy',
   stamina: 18,
@@ -304,6 +309,7 @@ const hammer: MoveDef = {
 
 const dashStraight: MoveDef = {
   id: 'dash_straight',
+  anim: 'dashStraight',
   name: 'Dash Straight',
   kind: 'heavy',
   stamina: 20,
@@ -457,6 +463,7 @@ const legSweep: MoveDef = {
 
 const stomp: MoveDef = {
   id: 'stomp',
+  anim: 'stomp',
   name: 'Stomp (on a downed opponent)',
   kind: 'light',
   stamina: 8,
@@ -479,6 +486,7 @@ const stomp: MoveDef = {
 
 const flyingKnee: MoveDef = {
   id: 'flying_knee',
+  anim: 'knee',
   name: 'Flying Knee',
   kind: 'heavy',
   stamina: 20,
@@ -647,6 +655,7 @@ const airSpin: MoveDef = {
 
 const diveKick: MoveDef = {
   id: 'dive_kick',
+  anim: 'diveKick',
   name: 'Dive Kick',
   kind: 'light',
   stamina: 12,
@@ -853,6 +862,7 @@ export const striker: CharacterDef = {
     },
     {
       id: 'rising_dragon',
+  anim: 'dragon',
       name: 'Rising Dragon (invincible reversal)',
       kind: 'special',
       stamina: 20,
