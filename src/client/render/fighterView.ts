@@ -1,98 +1,131 @@
-/** Placeholder articulated mannequin built from primitives, driven by the procedural skeleton. */
+/** Placeholder articulated fighter built from primitives, driven by the procedural skeleton. */
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { CharacterStats } from '../../core/types';
-import { bodyOf, type Joints, type PoseTargets, type V3 } from './skeleton';
+import { bodyOf, type JointPoint, type Joints, type Pose, type V3 } from './anim';
 
 const UP = new THREE.Vector3(0, 1, 0);
-const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1);
-const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
-const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 14, 1);
+/** Tapered limb: thick at the segment start (bottom, y = -0.5), thinner at the end. */
+const taperGeo = new THREE.CylinderGeometry(0.78, 1, 1, 14, 1);
+const sphereGeo = new THREE.SphereGeometry(1, 20, 14);
+const roundBox = new RoundedBoxGeometry(1, 1, 1, 3, 0.28);
 
 /** core local (x right, y up, z forward) -> three.js local (x right, y up, -z forward). */
 export const toThree = (p: V3, out = new THREE.Vector3()): THREE.Vector3 => out.set(p.x, p.y, -p.z);
 
-interface Bone {
+interface Segment {
   mesh: THREE.Mesh;
-  a: keyof Joints;
-  b: keyof Joints;
+  a: JointPoint;
+  b: JointPoint;
   radius: number;
+  /** Hidden in first person. */
   body: boolean;
 }
 
 export class FighterView {
   readonly root = new THREE.Group();
-  private readonly bones: Bone[] = [];
+  private readonly segments: Segment[] = [];
+  private readonly jointBalls: { mesh: THREE.Mesh; j: JointPoint; body: boolean }[] = [];
+  private readonly torso: THREE.Mesh;
+  private readonly pelvis: THREE.Mesh;
+  private readonly belt: THREE.Mesh;
   private readonly head: THREE.Mesh;
+  private readonly hair: THREE.Mesh;
   private readonly visor: THREE.Mesh;
   private readonly fists: THREE.Mesh[] = [];
+  private readonly wraps: THREE.Mesh[] = [];
   private readonly feet: THREE.Mesh[] = [];
-  private readonly jointsMesh: { mesh: THREE.Mesh; j: keyof Joints; body: boolean }[] = [];
-  private readonly mat: THREE.MeshStandardMaterial;
-  private readonly skinMat: THREE.MeshStandardMaterial;
+  private readonly mats: THREE.MeshStandardMaterial[] = [];
+  private readonly skin: THREE.MeshStandardMaterial;
   private readonly aura: THREE.Mesh;
+  private readonly b: ReturnType<typeof bodyOf>;
+  private flashT = 0;
   private readonly tmpA = new THREE.Vector3();
   private readonly tmpB = new THREE.Vector3();
-  private readonly flash: { t: number } = { t: 0 };
-  private readonly fistSize: number;
+  private readonly tmpC = new THREE.Vector3();
+  private readonly basis = new THREE.Matrix4();
 
   constructor(color: number, stats: CharacterStats) {
-    const b = bodyOf(stats);
-    this.fistSize = 0.075 * b.s;
-    this.mat = new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.1 });
-    const dark = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.45), roughness: 0.7 });
-    this.skinMat = new THREE.MeshStandardMaterial({ color: 0xe8c4a0, roughness: 0.6, emissive: 0x000000 });
+    const b = (this.b = bodyOf(stats));
+    const mat = (c: number | THREE.Color, rough = 0.6, metal = 0.05): THREE.MeshStandardMaterial => {
+      const m = new THREE.MeshStandardMaterial({ color: c, roughness: rough, metalness: metal });
+      this.mats.push(m);
+      return m;
+    };
+    const base = new THREE.Color(color);
+    const shirt = mat(base, 0.55);
+    const pants = mat(base.clone().multiplyScalar(0.32), 0.75);
+    this.skin = mat(0xe2b48f, 0.55);
+    const wrap = mat(0xf2efe6, 0.8);
+    const shoe = mat(0x1c1c22, 0.6);
+    const beltMat = mat(base.clone().lerp(new THREE.Color(0xffd27a), 0.6), 0.4, 0.3);
 
-    const bone = (a: keyof Joints, bb: keyof Joints, radius: number, mat: THREE.Material, body = false): void => {
-      const mesh = new THREE.Mesh(cylGeo, mat);
+    const seg = (a: JointPoint, bb: JointPoint, radius: number, m: THREE.Material, body = false, taper = false): void => {
+      const mesh = new THREE.Mesh(taper ? taperGeo : cylGeo, m);
       mesh.castShadow = true;
       this.root.add(mesh);
-      this.bones.push({ mesh, a, b: bb, radius, body });
+      this.segments.push({ mesh, a, b: bb, radius, body });
     };
-    const joint = (j: keyof Joints, r: number, mat: THREE.Material, body = false): void => {
-      const mesh = new THREE.Mesh(sphereGeo, mat);
+    const ball = (j: JointPoint, r: number, m: THREE.Material, body = false): void => {
+      const mesh = new THREE.Mesh(sphereGeo, m);
       mesh.scale.setScalar(r);
       mesh.castShadow = true;
       this.root.add(mesh);
-      this.jointsMesh.push({ mesh, j, body });
+      this.jointBalls.push({ mesh, j, body });
     };
 
-    bone('hip', 'chest', 0.17 * b.w, this.mat, true);
-    bone('lShoulder', 'rShoulder', 0.07 * b.w, this.mat, true);
-    joint('hip', 0.16 * b.w, dark, true);
-    joint('chest', 0.17 * b.w, this.mat, true);
-    bone('lShoulder', 'lElbow', 0.055 * b.s, this.mat);
-    bone('rShoulder', 'rElbow', 0.055 * b.s, this.mat);
-    bone('lElbow', 'lHand', 0.048 * b.s, this.skinMat);
-    bone('rElbow', 'rHand', 0.048 * b.s, this.skinMat);
-    joint('lElbow', 0.052 * b.s, this.mat);
-    joint('rElbow', 0.052 * b.s, this.mat);
-    bone('lHipJ', 'lKnee', 0.075 * b.s, dark);
-    bone('rHipJ', 'rKnee', 0.075 * b.s, dark);
-    bone('lKnee', 'lFoot', 0.06 * b.s, dark);
-    bone('rKnee', 'rFoot', 0.06 * b.s, dark);
-    joint('lKnee', 0.065 * b.s, dark);
-    joint('rKnee', 0.065 * b.s, dark);
+    this.torso = new THREE.Mesh(roundBox, shirt);
+    this.torso.castShadow = true;
+    this.pelvis = new THREE.Mesh(roundBox, pants);
+    this.pelvis.castShadow = true;
+    this.belt = new THREE.Mesh(roundBox, beltMat);
+    this.root.add(this.torso, this.pelvis, this.belt);
+
+    seg('neck', 'head', 0.055 * b.s, this.skin, true);
+    // Arms: sleeve on the upper arm (hidden in first person), skin forearm, wrap, fist.
+    seg('lShoulder', 'lElbow', 0.062 * b.s, shirt, true);
+    seg('rShoulder', 'rElbow', 0.062 * b.s, shirt, true);
+    ball('lShoulder', 0.075 * b.s, shirt, true);
+    ball('rShoulder', 0.075 * b.s, shirt, true);
+    ball('lElbow', 0.046 * b.s, this.skin);
+    ball('rElbow', 0.046 * b.s, this.skin);
+    seg('lElbow', 'lHand', 0.043 * b.s, this.skin, false, true);
+    seg('rElbow', 'rHand', 0.043 * b.s, this.skin, false, true);
+    // Legs.
+    seg('lHipJ', 'lKnee', 0.085 * b.s, pants, false, true);
+    seg('rHipJ', 'rKnee', 0.085 * b.s, pants, false, true);
+    ball('lKnee', 0.07 * b.s, pants);
+    ball('rKnee', 0.07 * b.s, pants);
+    seg('lKnee', 'lFoot', 0.068 * b.s, pants, false, true);
+    seg('rKnee', 'rFoot', 0.068 * b.s, pants, false, true);
 
     for (let i = 0; i < 2; i++) {
-      const fist = new THREE.Mesh(sphereGeo, this.skinMat);
-      fist.scale.setScalar(0.075 * b.s);
+      const fist = new THREE.Mesh(roundBox, this.skin);
       fist.castShadow = true;
+      fist.scale.set(0.11 * b.s, 0.095 * b.s, 0.12 * b.s);
       this.fists.push(fist);
-      this.root.add(fist);
-      const foot = new THREE.Mesh(boxGeo, dark);
-      foot.scale.set(0.11 * b.w, 0.08, 0.24 * b.s);
+      const w = new THREE.Mesh(cylGeo, wrap);
+      w.scale.set(0.05 * b.s, 0.075 * b.s, 0.05 * b.s);
+      this.wraps.push(w);
+      const foot = new THREE.Mesh(roundBox, shoe);
       foot.castShadow = true;
+      foot.scale.set(0.11 * b.w, 0.09 * b.s, 0.26 * b.s);
       this.feet.push(foot);
-      this.root.add(foot);
+      this.root.add(fist, w, foot);
     }
 
-    this.head = new THREE.Mesh(sphereGeo, this.skinMat);
-    this.head.scale.set(0.12 * b.s, 0.14 * b.s, 0.13 * b.s);
+    this.head = new THREE.Mesh(sphereGeo, this.skin);
+    this.head.scale.set(0.115 * b.s, 0.135 * b.s, 0.125 * b.s);
     this.head.castShadow = true;
-    this.root.add(this.head);
-    this.visor = new THREE.Mesh(boxGeo, new THREE.MeshStandardMaterial({ color: 0x111111, emissive: color, emissiveIntensity: 0.6 }));
-    this.visor.scale.set(0.2 * b.s, 0.045 * b.s, 0.06);
-    this.root.add(this.visor);
+    this.hair = new THREE.Mesh(sphereGeo, mat(0x23180f, 0.9));
+    this.hair.scale.set(0.12 * b.s, 0.1 * b.s, 0.128 * b.s);
+    this.visor = new THREE.Mesh(
+      roundBox,
+      new THREE.MeshStandardMaterial({ color: 0x0c0c10, emissive: color, emissiveIntensity: 0.7, roughness: 0.3 }),
+    );
+    this.visor.scale.set(0.2 * b.s, 0.045 * b.s, 0.06 * b.s);
+    this.root.add(this.head, this.hair, this.visor);
 
     this.aura = new THREE.Mesh(
       sphereGeo,
@@ -104,53 +137,101 @@ export class FighterView {
 
   /** Brief white flash when hit. */
   hitFlash(): void {
-    this.flash.t = 1;
+    this.flashT = 1;
   }
 
-  update(j: Joints, pose: PoseTargets, firstPerson: boolean, dt: number): void {
-    for (const bn of this.bones) {
-      const a = toThree(j[bn.a], this.tmpA);
-      const b = toThree(j[bn.b], this.tmpB);
-      const dir = b.clone().sub(a);
-      const len = dir.length();
-      bn.mesh.position.copy(a).add(b).multiplyScalar(0.5);
-      bn.mesh.scale.set(bn.radius, Math.max(len, 1e-3), bn.radius);
-      if (len > 1e-5) bn.mesh.quaternion.setFromUnitVectors(UP, dir.divideScalar(len));
-      bn.mesh.visible = !(firstPerson && bn.body);
-    }
-    for (const jm of this.jointsMesh) {
-      toThree(j[jm.j], jm.mesh.position);
-      jm.mesh.visible = !(firstPerson && jm.body);
-    }
-    toThree(j.lHand, this.fists[0].position);
-    toThree(j.rHand, this.fists[1].position);
-    for (const fist of this.fists) fist.scale.setScalar(this.fistSize * (firstPerson ? 0.75 : 1));
-    (['lFoot', 'rFoot'] as const).forEach((foot, i) => {
-      const fm = this.feet[i];
-      toThree(j[foot], fm.position);
-      fm.position.y += 0.04;
-      fm.position.z -= 0.06; // toes point forward (-Z in three.js local space)
-    });
-    toThree(j.head, this.head.position);
-    const headDir = this.tmpB.set(j.head.x - j.chest.x, j.head.y - j.chest.y, -(j.head.z - j.chest.z)).normalize();
-    this.head.quaternion.setFromUnitVectors(UP, headDir);
-    this.visor.position.copy(this.head.position).add(new THREE.Vector3(0, 0.02, -0.11).applyQuaternion(this.head.quaternion));
-    this.visor.quaternion.copy(this.head.quaternion);
-    this.head.visible = !firstPerson;
-    this.visor.visible = !firstPerson;
+  private placeSegment(mesh: THREE.Mesh, a: V3, b: V3, radius: number): void {
+    const pa = toThree(a, this.tmpA);
+    const pb = toThree(b, this.tmpB);
+    const dir = this.tmpC.copy(pb).sub(pa);
+    const length = dir.length();
+    mesh.position.copy(pa).add(pb).multiplyScalar(0.5);
+    mesh.scale.set(radius, Math.max(length, 1e-3), radius);
+    if (length > 1e-5) mesh.quaternion.setFromUnitVectors(UP, dir.divideScalar(length));
+  }
 
-    this.flash.t = Math.max(0, this.flash.t - dt * 8);
-    const glow = pose.glow;
-    this.skinMat.emissive.setRGB(glow * 0.6 + this.flash.t, glow * 0.45 + this.flash.t, glow * 0.15 + this.flash.t);
-    this.mat.emissive.setRGB(this.flash.t * 0.8, this.flash.t * 0.8, this.flash.t * 0.8);
+  /** Orients a box with the chest frame (right/up from the skeleton). */
+  private placeBox(mesh: THREE.Mesh, center: V3, right: V3, up: V3, size: [number, number, number]): void {
+    const r = toThree(right, new THREE.Vector3()).normalize();
+    const u = toThree(up, new THREE.Vector3()).normalize();
+    const f = new THREE.Vector3().crossVectors(r, u).normalize();
+    this.basis.makeBasis(r, u, f);
+    mesh.quaternion.setFromRotationMatrix(this.basis);
+    toThree(center, mesh.position);
+    mesh.scale.set(...size);
+  }
+
+  update(j: Joints, pose: Pose, firstPerson: boolean, dt: number): void {
+    const b = this.b;
+    for (const s of this.segments) {
+      this.placeSegment(s.mesh, j[s.a], j[s.b], s.radius);
+      s.mesh.visible = !(firstPerson && s.body);
+    }
+    for (const jb of this.jointBalls) {
+      toThree(j[jb.j], jb.mesh.position);
+      jb.mesh.visible = !(firstPerson && jb.body);
+    }
+
+    // Torso: chest box over the spine, pelvis, belt.
+    const mid = { x: (j.hip.x + j.chest.x) / 2, y: (j.hip.y + j.chest.y) / 2, z: (j.hip.z + j.chest.z) / 2 };
+    const torsoLen = Math.hypot(j.chest.x - j.hip.x, j.chest.y - j.hip.y, j.chest.z - j.hip.z);
+    const chestC = { x: mid.x + j.chestUp.x * 0.06, y: mid.y + j.chestUp.y * 0.06, z: mid.z + j.chestUp.z * 0.06 };
+    this.placeBox(this.torso, chestC, j.chestRight, j.chestUp, [0.44 * b.w, torsoLen * 1.05, 0.25 * b.w]);
+    const hipRight = { x: (j.rHipJ.x - j.lHipJ.x) * 5, y: (j.rHipJ.y - j.lHipJ.y) * 5, z: (j.rHipJ.z - j.lHipJ.z) * 5 };
+    this.placeBox(this.pelvis, j.hip, hipRight, j.chestUp, [0.36 * b.w, 0.2 * b.s, 0.24 * b.w]);
+    const beltC = { x: j.hip.x + j.chestUp.x * 0.1, y: j.hip.y + j.chestUp.y * 0.1, z: j.hip.z + j.chestUp.z * 0.1 };
+    this.placeBox(this.belt, beltC, hipRight, j.chestUp, [0.38 * b.w, 0.05 * b.s, 0.26 * b.w]);
+    for (const m of [this.torso, this.pelvis, this.belt]) m.visible = !firstPerson;
+
+    // Fists and wraps follow the forearm direction (knuckles forward).
+    (['lHand', 'rHand'] as const).forEach((hand, i) => {
+      const elbow = hand === 'lHand' ? j.lElbow : j.rElbow;
+      const pe = toThree(elbow, this.tmpA);
+      const ph = toThree(j[hand], this.tmpB);
+      const dir = this.tmpC.copy(ph).sub(pe).normalize();
+      const fist = this.fists[i];
+      fist.position.copy(ph).addScaledVector(dir, 0.045 * b.s);
+      fist.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
+      const s = firstPerson ? 0.92 : 1;
+      fist.scale.set(0.11 * b.s * s, 0.095 * b.s * s, 0.12 * b.s * s);
+      const w = this.wraps[i];
+      w.position.copy(ph).addScaledVector(dir, -0.03 * b.s);
+      w.quaternion.setFromUnitVectors(UP, dir);
+    });
+
+    // Feet: flat and forward when planted, pointed along the shin when kicking.
+    (['lFoot', 'rFoot'] as const).forEach((foot, i) => {
+      const knee = foot === 'lFoot' ? j.lKnee : j.rKnee;
+      const fm = this.feet[i];
+      const pf = toThree(j[foot], this.tmpA);
+      const shin = this.tmpB.copy(pf).sub(toThree(knee, this.tmpC)).normalize();
+      const raised = Math.min(1, Math.max(0, (j[foot].y - 0.25) / 0.4));
+      const flat = new THREE.Vector3(0, 0, -1);
+      const pointDir = flat.clone().lerp(shin, raised).normalize();
+      fm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), pointDir);
+      fm.position.copy(pf).addScaledVector(pointDir, 0.07 * b.s);
+      fm.position.y += 0.045 * (1 - raised);
+    });
+
+    // Head: orientation from the skeleton's head rotation.
+    toThree(j.head, this.head.position);
+    this.head.rotation.set(-j.headRot.pitch, j.headRot.yaw, -j.headRot.roll, 'YXZ');
+    this.hair.position.copy(this.head.position).add(new THREE.Vector3(0, 0.035 * b.s, 0.012).applyEuler(this.head.rotation));
+    this.hair.rotation.copy(this.head.rotation);
+    this.visor.position.copy(this.head.position).add(new THREE.Vector3(0, 0.015, -0.105 * b.s).applyEuler(this.head.rotation));
+    this.visor.rotation.copy(this.head.rotation);
+    for (const m of [this.head, this.hair, this.visor]) m.visible = !firstPerson;
+
+    // Hit flash and energy glow.
+    this.flashT = Math.max(0, this.flashT - dt * 12);
+    const g = pose.glow;
+    const fl = this.flashT * 0.28;
+    for (const m of this.mats) m.emissive.setRGB(fl, fl * 0.85, fl * 0.7);
+    this.skin.emissive.setRGB(g * 0.6 + fl, g * 0.45 + fl * 0.85, g * 0.15 + fl * 0.7);
     const aMat = this.aura.material as THREE.MeshBasicMaterial;
-    aMat.opacity = firstPerson ? 0 : glow * 0.18;
+    aMat.opacity = firstPerson ? 0 : g * 0.18;
     toThree(j.chest, this.aura.position).add(toThree(j.hip, this.tmpA)).multiplyScalar(0.5);
     this.aura.visible = aMat.opacity > 0.01;
-  }
-
-  setVisible(v: boolean): void {
-    this.root.visible = v;
   }
 
   dispose(): void {

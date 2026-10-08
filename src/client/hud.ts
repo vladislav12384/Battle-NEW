@@ -88,6 +88,8 @@ export class Hud {
   private readonly callouts: HTMLDivElement;
   private readonly training: HTMLDivElement;
   private readonly lockMarker: HTMLDivElement;
+  private readonly strikeEl: HTMLDivElement;
+  private strikeTimer = 0;
   private readonly vignette: HTMLDivElement;
   private readonly flashEl: HTMLDivElement;
   readonly moveList: HTMLDivElement;
@@ -101,6 +103,7 @@ export class Hud {
     this.target = new FighterPanel(this.root, 'right');
     el('div', 'crosshair', this.root);
     this.lockMarker = el('div', 'lock', this.root);
+    this.strikeEl = el('div', 'strike', this.root);
     this.combo = el('div', 'combo', this.root);
     this.comboHits = el('div', 'hits', this.combo);
     this.comboInfo = el('div', 'info', this.combo);
@@ -146,6 +149,16 @@ export class Hud {
     this.combo.classList.add('pop');
   }
 
+  /** Shows which strike came out and the flick direction that picked it (teaches the controls). */
+  strike(name: string, swipe: string): void {
+    const arrow: Record<string, string> = { none: '•', left: '←', right: '→', up: '↑', down: '↓' };
+    this.strikeEl.innerHTML = `<span class="arrow">${arrow[swipe] ?? '•'}</span>${name}`;
+    this.strikeTimer = 0.9;
+    this.strikeEl.classList.remove('pop');
+    void this.strikeEl.offsetWidth;
+    this.strikeEl.classList.add('pop');
+  }
+
   setLockMarker(x: number | null, y = 0): void {
     if (x === null) {
       this.lockMarker.style.display = 'none';
@@ -160,6 +173,8 @@ export class Hud {
     this.player.update(player, sim, dt);
     this.target.update(target, sim, dt);
     this.comboTimer -= dt;
+    this.strikeTimer -= dt;
+    this.strikeEl.style.opacity = this.strikeTimer > 0 ? String(Math.min(1, this.strikeTimer * 3)) : '0';
     this.combo.style.opacity = this.comboTimer > 0 ? String(Math.min(1, this.comboTimer * 2)) : '0';
     const adv =
       info.advantage === null
@@ -179,42 +194,53 @@ export class Hud {
 
   buildMoveList(c: CharacterDef): void {
     const btn: Record<number, string> = {
-      [Button.LIGHT]: 'LMB',
-      [Button.HEAVY]: 'RMB',
+      [Button.LIGHT]: 'ЛКМ',
+      [Button.HEAVY]: 'ПКМ',
+      [Button.KICK]: 'Q',
       [Button.SPECIAL]: 'E',
-      [Button.GRAB]: 'Q',
+      [Button.GRAB]: 'G',
       [Button.SUPER]: 'R',
     };
     const dir: Record<string, string> = { forward: 'W+', back: 'S+', left: 'A+', right: 'D+' };
-    const btnRu: Record<string, string> = { LMB: 'ЛКМ', RMB: 'ПКМ' };
+    const flick: Record<string, string> = { left: '←', right: '→', up: '↑', down: '↓' };
     const rows: string[] = [];
     for (const cmd of c.commands) {
       const m = c.moves[cmd.move];
-      const key = btn[cmd.button] ?? '?';
-      const input = `${cmd.running ? 'Бег+' : ''}${cmd.dir ? dir[cmd.dir] : ''}${btnRu[key] ?? key}`;
+      const parts = [
+        cmd.running ? 'Бег+' : '',
+        cmd.dir ? dir[cmd.dir] : '',
+        btn[cmd.button] ?? '?',
+        cmd.swipe ? ` ${flick[cmd.swipe]}` : '',
+      ];
+      const note = cmd.afterHand ? ' (чередуется с джебом)' : cmd.context === 'targetDown' ? ' (по лежачему)' : '';
       const where = cmd.air === true ? 'в воздухе' : cmd.air === false ? 'на земле' : '';
       const frames = `${m.startup}/${m.active}/${m.recovery}`;
-      rows.push(`<tr><td><kbd>${input}</kbd></td><td>${m.name}</td><td>${where}</td><td>${frames}</td><td>${m.meterCost ? `${m.meterCost} метра` : ''}</td></tr>`);
+      rows.push(
+        `<tr><td><kbd>${parts.join('')}</kbd></td><td>${m.name}${note}</td><td>${where}</td><td>${frames}</td><td>${m.meterCost ? `${m.meterCost} метра` : ''}</td></tr>`,
+      );
     }
     this.moveList.innerHTML = `
       <h2>${c.name} — список приёмов</h2>
+      <p>Удар выбирается кнопкой и <b>взмахом мыши</b> в момент нажатия: дёрни взгляд ← → ↑ ↓ и нажми удар.
+      Стрелки в таблице — направление взмаха.</p>
       <table><tr><th>Ввод</th><th>Приём</th><th></th><th>Кадры: старт/актив/восст.</th><th></th></tr>${rows.join('')}</table>
-      <h3>Строки и комбо</h3>
+      <h3>Свободные комбо</h3>
       <ul>
-        <li><kbd>ЛКМ ЛКМ ЛКМ ЛКМ</kbd> — джеб, кросс, хук, круговой (впечатывает в стену)</li>
-        <li><kbd>ЛКМ ЛКМ ПКМ</kbd> — лаунчер → <kbd>Space</kbd> при попадании = прыжок за противником → в воздухе <kbd>ЛКМ ЛКМ ПКМ</kbd> (добивание вниз, отскок от земли)</li>
-        <li><kbd>ЛКМ ЛКМ ЛКМ ПКМ</kbd> — удар-молот (отскок от земли) → <kbd>ПКМ</kbd> при попадании = снова подброс</li>
-        <li><kbd>ПКМ</kbd> держать — заряд; полный заряд не блокируется. <kbd>ПКМ ПКМ</kbd> — бэкфист (отскок от стены)</li>
-        <li>Любой обычный удар при попадании/блоке → <kbd>E</kbd> спецприём / <kbd>R</kbd> супер (отмена)</li>
-        <li><kbd>Shift</kbd> во время атаки за 50 метра = Ki Cancel (выход из атаки или продление комбо)</li>
+        <li>Любой удар руками или ногами сразу после попадания переходит в <b>любой другой</b> — комбо собираешь сам</li>
+        <li>Пример: <kbd>ЛКМ</kbd> <kbd>ЛКМ</kbd> <kbd>ЛКМ ←</kbd> <kbd>ЛКМ ↑</kbd> <kbd>Q ←</kbd> — джеб, кросс, правый хук, апперкот, круговой</li>
+        <li>Повторять одно и то же невыгодно: однотипные удары в одном комбо слабеют, и противник вырывается</li>
+        <li><kbd>ПКМ ↑</kbd> подбрасывает → <kbd>Space</kbd> при попадании = прыжок вслед → удары в воздухе → <kbd>ПКМ</kbd> = добивание вниз</li>
+        <li><kbd>ПКМ</kbd> держать — заряд, полный заряд не блокируется. <kbd>F</kbd> во время замаха тяжёлого = <b>финт</b></li>
+        <li>Двигайся во время ударов: <kbd>W</kbd> — дотягиваешься дальше, <kbd>S</kbd> — бьёшь, сохраняя дистанцию</li>
+        <li>Удар при попадании/блоке → <kbd>E</kbd> спецприём или <kbd>R</kbd> супер. <kbd>Shift</kbd> во время атаки за 50 метра = Ki Cancel</li>
       </ul>
       <h3>Защита и выход из комбо</h3>
       <ul>
-        <li><kbd>F</kbd> держать = блок спереди (урон «по касательной» + урон по стойке). Нажать <kbd>F</kbd> прямо перед ударом = <b>парирование</b> (спам блокируется)</li>
+        <li><kbd>F</kbd> держать = блок спереди; стойка поворачивается медленно, так что заход сбоку работает. Нажать <kbd>F</kbd> прямо перед ударом = <b>парирование</b></li>
         <li><kbd>Shift</kbd> = уклонение с неуязвимостью (впритык = идеальное уклонение → контратака). Держать — бег</li>
         <li><kbd>X</kbd> в комбо при полной шкале = <b>Burst</b>, разрыв комбо</li>
-        <li>В воздухе: <kbd>Space</kbd>/<kbd>Shift</kbd> после хитстана = воздушный тех; <kbd>Shift</kbd> перед приземлением = тех на земле; <kbd>Shift</kbd> лёжа = перекат</li>
-        <li>Схватили: быстро <kbd>Q</kbd> = разрыв броска</li>
+        <li>В воздухе: <kbd>Space</kbd>/<kbd>Shift</kbd> после хитстана = тех; <kbd>Shift</kbd> перед приземлением = тех на земле; <kbd>Shift</kbd> лёжа = перекат</li>
+        <li>Схватили: быстро <kbd>G</kbd> = разрыв броска</li>
       </ul>
       <p class="hint">Нажми <kbd>H</kbd>, чтобы закрыть</p>`;
   }

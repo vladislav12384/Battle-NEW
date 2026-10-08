@@ -30,10 +30,11 @@ canvas.addEventListener('click', () => {
 });
 document.addEventListener('pointerlockchange', () => {
   const locked = game.input.locked;
-  game.paused = !locked && !demo;
-  start.classList.toggle('hidden', locked || demo);
+  game.paused = !locked && !demo && !params.has('manual');
+  start.classList.toggle('hidden', locked || demo || params.has('manual'));
 });
-if (demo) {
+const manual = params.has('manual'); // tooling: frames are stepped from outside (game.frame(dt))
+if (demo || manual) {
   game.paused = false;
   start.classList.add('hidden');
 }
@@ -44,4 +45,4 @@ function loop(now: number): void {
   last = now;
   requestAnimationFrame(loop);
 }
-requestAnimationFrame(loop);
+if (!manual) requestAnimationFrame(loop);

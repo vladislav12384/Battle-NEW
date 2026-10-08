@@ -1,17 +1,22 @@
 /**
  * Keyboard + mouse + gamepad -> InputFrame.
- * Presses are latched until the next simulation tick so a tap shorter than
- * one frame (16 ms) is never lost.
+ *
+ * - Presses are latched until the next simulation tick so a tap shorter than
+ *   one frame (16 ms) is never lost.
+ * - The "swipe" (look flick) is measured from the last ~160 ms of mouse or
+ *   right-stick motion: flick left/right/up/down while pressing an attack to
+ *   pick hooks, uppercuts, overheads, roundhouses...
  */
-import { Button, type InputFrame } from '../core/input';
+import { Button, type InputFrame, type Swipe, swipeCode } from '../core/input';
 
 export const KEY_BINDINGS: Record<string, number> = {
   KeyF: Button.BLOCK,
   ShiftLeft: Button.DODGE,
   ShiftRight: Button.DODGE,
   Space: Button.JUMP,
+  KeyQ: Button.KICK,
   KeyE: Button.SPECIAL,
-  KeyQ: Button.GRAB,
+  KeyG: Button.GRAB,
   KeyR: Button.SUPER,
   KeyX: Button.BURST,
   Tab: Button.LOCK,
@@ -21,21 +26,29 @@ export const MOUSE_BINDINGS: Record<number, number> = {
   0: Button.LIGHT,
   1: Button.LOCK,
   2: Button.HEAVY,
+  3: Button.KICK, // side button "back"
+  4: Button.GRAB, // side button "forward"
 };
 
 /** Standard gamepad layout (Xbox naming). */
 const PAD_BINDINGS: [number, number][] = [
   [0, Button.JUMP], // A
-  [1, Button.DODGE], // B
+  [1, Button.KICK], // B
   [2, Button.LIGHT], // X
   [3, Button.HEAVY], // Y
-  [4, Button.GRAB], // LB
+  [4, Button.DODGE], // LB
   [5, Button.BLOCK], // RB
-  [6, Button.SUPER], // LT
+  [6, Button.GRAB], // LT
   [7, Button.SPECIAL], // RT
+  [8, Button.SUPER], // View
   [10, Button.BURST], // L3
   [11, Button.LOCK], // R3
 ];
+
+const ATTACKS = Button.LIGHT | Button.HEAVY | Button.KICK;
+const SWIPE_WINDOW_MS = 160;
+/** Minimum look rotation inside the window to count as a flick (radians). */
+const SWIPE_THRESHOLD = 0.05;
 
 export class InputDevice {
   yaw = 0;
@@ -45,6 +58,12 @@ export class InputDevice {
   private latched = 0;
   private keys = new Set<string>();
   private padYawSpeed = 3.2;
+  /** Recent look motion (radians) for swipe detection. */
+  private motion: { t: number; dYaw: number; dPitch: number }[] = [];
+  /** Swipe captured at the moment an attack button went down (sent on the next tick). */
+  private pressSwipe: Swipe = 'none';
+  /** Last detected swipe + time, for the HUD. */
+  lastSwipe: { swipe: Swipe; t: number } = { swipe: 'none', t: 0 };
 
   constructor(private readonly target: HTMLElement) {
     window.addEventListener('keydown', (e) => this.onKey(e, true));
@@ -54,8 +73,11 @@ export class InputDevice {
     target.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
-      this.yaw -= e.movementX * this.sensitivity;
-      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - e.movementY * this.sensitivity));
+      const dYaw = -e.movementX * this.sensitivity;
+      const dPitch = -e.movementY * this.sensitivity;
+      this.yaw += dYaw;
+      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + dPitch));
+      this.motion.push({ t: performance.now(), dYaw, dPitch });
     });
     window.addEventListener('blur', () => {
       this.held = 0;
@@ -67,6 +89,30 @@ export class InputDevice {
     return document.pointerLockElement === this.target;
   }
 
+  /** Classifies recent look motion into a flick direction. */
+  currentSwipe(now = performance.now()): Swipe {
+    const since = now - SWIPE_WINDOW_MS;
+    while (this.motion.length && this.motion[0].t < since) this.motion.shift();
+    let yaw = 0;
+    let pitch = 0;
+    for (const m of this.motion) {
+      yaw += m.dYaw;
+      pitch += m.dPitch;
+    }
+    if (Math.max(Math.abs(yaw), Math.abs(pitch)) < SWIPE_THRESHOLD) return 'none';
+    if (Math.abs(yaw) >= Math.abs(pitch) * 0.9) return yaw > 0 ? 'left' : 'right';
+    return pitch > 0 ? 'up' : 'down';
+  }
+
+  private press(b: number): void {
+    this.held |= b;
+    this.latched |= b;
+    if (b & ATTACKS) {
+      this.pressSwipe = this.currentSwipe();
+      this.lastSwipe = { swipe: this.pressSwipe, t: performance.now() };
+    }
+  }
+
   private onKey(e: KeyboardEvent, down: boolean): void {
     if (!this.locked) return;
     const b = KEY_BINDINGS[e.code];
@@ -74,12 +120,8 @@ export class InputDevice {
     if (down) this.keys.add(e.code);
     else this.keys.delete(e.code);
     if (b === undefined || e.repeat) return;
-    if (down) {
-      this.held |= b;
-      this.latched |= b;
-    } else {
-      this.held &= ~b;
-    }
+    if (down) this.press(b);
+    else this.held &= ~b;
   }
 
   private onMouse(e: MouseEvent, down: boolean): void {
@@ -87,12 +129,8 @@ export class InputDevice {
     const b = MOUSE_BINDINGS[e.button];
     if (b === undefined) return;
     e.preventDefault();
-    if (down) {
-      this.held |= b;
-      this.latched |= b;
-    } else {
-      this.held &= ~b;
-    }
+    if (down) this.press(b);
+    else this.held &= ~b;
   }
 
   /** Builds the input for one simulation tick. */
@@ -100,6 +138,7 @@ export class InputDevice {
     let moveX = (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0);
     let moveY = (this.keys.has('KeyW') ? 1 : 0) - (this.keys.has('KeyS') ? 1 : 0);
     let buttons = this.held | this.latched;
+    const fresh = this.latched;
     this.latched = 0;
 
     const pad = navigator.getGamepads?.().find((p) => p && p.connected);
@@ -107,16 +146,28 @@ export class InputDevice {
       const dz = (v: number) => (Math.abs(v) < 0.18 ? 0 : v);
       moveX += dz(pad.axes[0] ?? 0);
       moveY -= dz(pad.axes[1] ?? 0);
-      this.yaw -= dz(pad.axes[2] ?? 0) * this.padYawSpeed * dt;
-      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch - dz(pad.axes[3] ?? 0) * 2.2 * dt));
-      for (const [i, b] of PAD_BINDINGS) if (pad.buttons[i]?.pressed) buttons |= b;
+      const dYaw = -dz(pad.axes[2] ?? 0) * this.padYawSpeed * dt;
+      const dPitch = -dz(pad.axes[3] ?? 0) * 2.2 * dt;
+      this.yaw += dYaw;
+      this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + dPitch));
+      if (dYaw || dPitch) this.motion.push({ t: performance.now(), dYaw: dYaw * 1.6, dPitch: dPitch * 1.6 });
+      for (const [i, b] of PAD_BINDINGS) {
+        if (!pad.buttons[i]?.pressed) continue;
+        if (b & ATTACKS && !(buttons & b)) {
+          this.pressSwipe = this.currentSwipe();
+          this.lastSwipe = { swipe: this.pressSwipe, t: performance.now() };
+        }
+        buttons |= b;
+      }
     }
     const m = Math.hypot(moveX, moveY);
     if (m > 1) {
       moveX /= m;
       moveY /= m;
     }
-    return { moveX, moveY, yaw: this.yaw, pitch: this.pitch, buttons };
+    const swipe = fresh & ATTACKS || buttons & ATTACKS ? swipeCode(this.pressSwipe) : 0;
+    if (!(buttons & ATTACKS)) this.pressSwipe = 'none';
+    return { moveX, moveY, yaw: this.yaw, pitch: this.pitch, buttons, swipe };
   }
 
   isKey(code: string): boolean {

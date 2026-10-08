@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { CHARACTERS } from '../content';
 import { Bot, type BotMode } from '../core/ai/bot';
 import { type InputFrame } from '../core/input';
-import { chestPos } from '../core/moves';
+import { chestHeight, chestPos } from '../core/moves';
 import { vec3, wrapAngle } from '../core/math/vec3';
 import { DEFAULT_ARENA } from '../core/physics';
 import { DT, RULES } from '../core/rules';
@@ -19,13 +19,19 @@ import { FighterView, toThree } from './render/fighterView';
 import { Fx } from './render/fx';
 import {
   advanceWalk,
+  animate,
   type AnimMemory,
-  computePose,
+  blockReaction,
+  computeTargets,
+  hitReaction,
+  impactRecoil,
+  type Joints,
   newAnimMemory,
-  type PoseTargets,
-  smoothPose,
+  type Pose,
+  REST_HEAD,
   solveSkeleton,
-} from './render/skeleton';
+  Spring,
+} from './render/anim';
 import { World } from './render/world';
 
 const DUMMY_MODES: BotMode[] = ['fighter', 'idle', 'block', 'parry', 'dodge'];
@@ -41,10 +47,12 @@ interface ViewEntry {
   view: FighterView;
   mem: AnimMemory;
   prev: { x: number; y: number; z: number; yaw: number };
-  pose: PoseTargets | null;
+  pose: Pose | null;
+  joints: Joints | null;
+  /** Rendered body yaw (springy for the local player: arms trail quick flicks). */
+  yaw: Spring;
 }
 
-const FREE_STATES = new Set(['ground', 'air', 'block', 'dodge', 'jumpsquat', 'land']);
 const ACTIONABLE = new Set(['ground', 'air', 'block']);
 
 export interface GameOptions {
@@ -88,6 +96,11 @@ export class Game {
   private advResult: { value: number; kind: string } | null = null;
   private kick = { pitch: 0, roll: 0, fov: 0 };
   private demoBot: Bot | null = null;
+  /** Debug/tooling hook: drives the local player with a script instead of the devices. */
+  scriptedInput: ((tick: number, game: Game) => Partial<InputFrame>) | null = null;
+  /** Debug/tooling hook: overrides the camera after it has been placed. */
+  cameraOverride: ((camera: THREE.PerspectiveCamera, game: Game) => void) | null = null;
+  private scriptTick = 0;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -220,7 +233,14 @@ export class Game {
         const color = f.team === 0 ? c.color : new THREE.Color(c.color).lerp(new THREE.Color(0xd8402a), 0.85).getHex();
         const view = new FighterView(color, sim.statsOf(f));
         this.world.scene.add(view.root);
-        e = { view, mem: newAnimMemory(f.id * 1.7), prev: { x: f.pos.x, y: f.pos.y, z: f.pos.z, yaw: f.yaw }, pose: null };
+        e = {
+          view,
+          mem: newAnimMemory(f.id * 1.7),
+          prev: { x: f.pos.x, y: f.pos.y, z: f.pos.z, yaw: f.yaw },
+          pose: null,
+          joints: null,
+          yaw: new Spring(f.yaw),
+        };
         e.mem.lastX = f.pos.x;
         e.mem.lastZ = f.pos.z;
         this.views.set(f.id, e);
@@ -230,14 +250,21 @@ export class Game {
 
     const inputs: Record<number, InputFrame> = {};
     const p = this.player;
-    if (p) inputs[p.id] = this.demoBot ? this.demoBot.think(sim) : this.input.sample(DT);
+    if (p && this.scriptedInput) {
+      const s = this.scriptedInput(this.scriptTick++, this);
+      this.input.yaw = s.yaw ?? this.input.yaw;
+      this.input.pitch = s.pitch ?? this.input.pitch;
+      inputs[p.id] = { moveX: 0, moveY: 0, buttons: 0, swipe: 0, ...s, yaw: this.input.yaw, pitch: this.input.pitch };
+    } else if (p) inputs[p.id] = this.demoBot ? this.demoBot.think(sim) : this.input.sample(DT);
     for (const [id, bot] of this.bots) inputs[id] = bot.think(sim);
     const events = sim.step(inputs);
 
     if (p) {
-      // The simulation owns facing (lock-on, tracking): the camera follows it.
-      this.input.yaw = p.yaw;
-      if (p.lockTarget >= 0 || p.state === 'attack') this.input.pitch = p.aimPitch;
+      // The camera belongs to the player. Only an explicit lock-on steers it.
+      if (p.lockTarget >= 0) {
+        this.input.yaw = p.yaw;
+        this.input.pitch = p.aimPitch;
+      }
       if (this.settings.infiniteMeter) {
         p.meter = RULES.meterMax;
         p.burst = RULES.burstMax;
@@ -281,6 +308,21 @@ export class Game {
     return Math.max(0.15, 1 - Math.hypot(p.x - c.x, p.z - c.z) / 25);
   }
 
+  /** Physical reaction of the victim's body (and a jolt for the attacker). */
+  private reactToHit(victimId: number, attackerId: number, dir: { x: number; y: number; z: number }, point: { y: number }, strength: number): void {
+    const v = this.sim.fighter(victimId);
+    const ve = this.views.get(victimId);
+    if (v && ve) {
+      const c = Math.cos(v.yaw);
+      const s = Math.sin(v.yaw);
+      const local = { x: dir.x * c - dir.z * s, y: dir.y, z: -dir.x * s - dir.z * c };
+      const high = point.y - v.pos.y > chestHeight(this.sim.statsOf(v)) - 0.05;
+      hitReaction(ve.mem, local, high, strength);
+    }
+    const ae = this.views.get(attackerId);
+    if (ae) impactRecoil(ae.mem, strength * 0.6);
+  }
+
   private present(e: GameEvent): void {
     const me = this.playerId;
     const fx = this.fx;
@@ -299,6 +341,7 @@ export class Game {
         if (heavy) fx.ring(at, color, 2.2, 0.25);
         sfx.play(heavy ? 'hitHeavy' : 'hitLight', this.nearCamera(at) * (heavy ? 1.2 : 1));
         this.views.get(e.victim)?.view.hitFlash();
+        this.reactToHit(e.victim, e.attacker, e.dir, e.point, Math.min(1.6, e.force / 7 + e.damage / 90 + (e.counter ? 0.3 : 0)));
         if (e.victim === me) {
           hud.hurt(e.damage);
           fx.shake(heavy ? 0.6 : 0.3);
@@ -324,6 +367,10 @@ export class Game {
         fx.spark(at, { color: 0x66aaff, count: 12, speed: 5, size: 0.08 });
         fx.flash(at, 0x4488ff, 0.8, 0.1);
         sfx.play('block', this.nearCamera(at));
+        const vb = this.views.get(e.victim);
+        if (vb) blockReaction(vb.mem, 0.8);
+        const ab = this.views.get(e.attacker);
+        if (ab) impactRecoil(ab.mem, 0.6);
         if (e.victim === me) fx.shake(0.12);
         if (e.attacker === me) this.lastTarget = e.victim;
         break;
@@ -334,6 +381,10 @@ export class Game {
         fx.flash(at, 0xccffff, 2.2, 0.18);
         fx.ring(at, 0x88ffff, 3, 0.35);
         sfx.play('parry');
+        const ap = this.views.get(e.attacker);
+        if (ap) impactRecoil(ap.mem, 1.6);
+        const vp = this.views.get(e.victim);
+        if (vp) blockReaction(vp.mem, 0.5);
         if (e.victim === me || e.attacker === me) {
           hud.callout('PARRY!', 'cyan');
           hud.flash('rgba(200,255,255,1)', 0.25);
@@ -377,8 +428,15 @@ export class Game {
       case 'attack': {
         const f = this.sim.fighter(e.fighter);
         if (f) sfx.play('whoosh', this.nearCamera(f.pos) * 0.8);
+        if (e.fighter === me && f) {
+          const m = this.sim.moveById(f.charId, e.move);
+          if (m) hud.strike(m.name, this.input.lastSwipe.swipe);
+        }
         break;
       }
+      case 'feint':
+        if (e.fighter === me) hud.callout('FEINT', 'white');
+        break;
       case 'super': {
         const f = this.sim.fighter(e.fighter);
         if (f) {
@@ -476,7 +534,7 @@ export class Game {
     const me = this.player;
     const firstPerson = !this.settings.thirdPerson;
     let headWorld: THREE.Vector3 | null = null;
-    let mePose: PoseTargets | null = null;
+    let meJoints: Joints | null = null;
 
     for (const f of sim.state.fighters) {
       const e = this.views.get(f.id);
@@ -487,18 +545,35 @@ export class Game {
       const x = e.prev.x + (f.pos.x - e.prev.x) * k;
       const y = e.prev.y + (f.pos.y - e.prev.y) * k;
       const z = e.prev.z + (f.pos.z - e.prev.z) * k;
-      const yaw = e.prev.yaw + wrapAngle(f.yaw - e.prev.yaw) * k;
+      const isMe = f.id === this.playerId;
+      const fp = isMe && firstPerson;
+      let yaw = e.prev.yaw + wrapAngle(f.yaw - e.prev.yaw) * k;
+      if (fp) {
+        // Arms trail a fast flick a little and catch up: weight, not a rigid gun model.
+        yaw = e.yaw.step(e.yaw.x + wrapAngle(yaw - e.yaw.x), dt, 38, 0.8);
+      } else {
+        e.yaw.x = yaw;
+        e.yaw.v = 0;
+      }
       const jitter = f.shake > 0 ? 0.035 : 0;
       e.view.root.position.set(x + (Math.random() - 0.5) * jitter, y, z + (Math.random() - 0.5) * jitter);
       e.view.root.rotation.y = yaw;
       advanceWalk(e.mem, x, z, stats, f.running);
-      const target = computePose(f, stats, sim.moveOf(f), e.mem, this.time, frac);
-      const snappy = f.state === 'attack' || f.state === 'hitstun' || f.state === 'juggle';
-      const pose = smoothPose(e.mem, target, dt, snappy);
+      const target = computeTargets(f, stats, sim.moveOf(f), e.mem, this.time, frac, fp);
+      const pose = animate(e.mem, target, dt);
+      if (fp) {
+        // First-person viewmodel space: keep our own fists out of our face so a
+        // wind-up never fills the screen (visual only; hitboxes are unaffected).
+        const headZ = pose.hipZ + Math.sin(pose.lean) * 0.55;
+        for (const hand of ['lHand', 'rHand'] as const) {
+          const h = pose[hand];
+          pose[hand] = { x: h.x, y: Math.min(h.y, stats.eyeHeight - 0.15), z: Math.max(h.z, headZ + 0.36) };
+        }
+      }
       e.pose = pose;
       const joints = solveSkeleton(stats, pose);
-      const isMe = f.id === this.playerId;
-      e.view.update(joints, pose, isMe && firstPerson, dt);
+      e.joints = joints;
+      e.view.update(joints, pose, fp, dt);
       e.view.root.updateMatrixWorld();
 
       if (pose.striking.length) {
@@ -517,7 +592,7 @@ export class Game {
       }
       if (isMe) {
         headWorld = e.view.root.localToWorld(toThree(joints.head));
-        mePose = pose;
+        meJoints = joints;
       }
     }
     for (const [id, e] of this.views) {
@@ -530,7 +605,8 @@ export class Game {
     this.world.syncProjectiles(sim, frac);
     this.world.drawDebug(sim, this.settings.hitboxes, firstPerson ? this.playerId : -1);
     const shake = this.fx.update(dt);
-    this.updateCamera(me, headWorld, mePose, shake, dt);
+    this.updateCamera(me, headWorld, meJoints, shake, dt);
+    this.cameraOverride?.(this.world.camera, this);
 
     // Lock-on marker and HUD target.
     const lock = me && me.lockTarget >= 0 ? sim.fighter(me.lockTarget) : undefined;
@@ -558,7 +634,7 @@ export class Game {
   private updateCamera(
     me: FighterState | undefined,
     head: THREE.Vector3 | null,
-    pose: PoseTargets | null,
+    joints: Joints | null,
     shake: { x: number; y: number; roll: number },
     dt: number,
   ): void {
@@ -570,11 +646,10 @@ export class Game {
     cam.fov = 90 + this.kick.fov;
     cam.updateProjectionMatrix();
     if (!me) return;
-    const e = this.views.get(me.id);
-    const free = FREE_STATES.has(me.state) && me.lockTarget < 0;
-    const yaw = free || !e ? this.input.yaw : e.prev.yaw + wrapAngle(me.yaw - e.prev.yaw) * this.frac;
+    // The view is always where the player looks (or the lock-on target).
+    const yaw = this.input.yaw;
     const pitch = this.input.pitch;
-    if (this.settings.thirdPerson || !head) {
+    if (this.settings.thirdPerson || !head || !joints) {
       const f = this.views.get(me.id)?.view.root.position ?? new THREE.Vector3(me.pos.x, me.pos.y, me.pos.z);
       const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
       const dist = 3.2;
@@ -586,17 +661,17 @@ export class Game {
       cam.rotation.set(pitch * 0.6 - 0.18 + shake.y, yaw + shake.x, shake.roll);
       return;
     }
-    // First person: eyes ride the animated head (lean, tumble, knockdown...).
-    const tiltP = pose ? pose.tiltPitch : 0;
-    const tiltR = pose ? pose.tiltRoll : 0;
+    // First person: the eyes ride the animated head, and the head's motion
+    // relative to the guard stance (lean into a cross, twist of a hook, a hit
+    // snapping the head back, tumbling through the air...) moves the view.
+    const hr = joints.headRot;
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    // Eyes sit slightly behind the head center so the fists don't fill the screen.
     cam.position.copy(head).addScaledVector(fwd, -0.1);
     cam.position.y += 0.06;
     cam.rotation.set(
-      pitch + this.kick.pitch + shake.y - tiltP * 0.7,
-      yaw + shake.x,
-      this.kick.roll + shake.roll - tiltR * 0.6,
+      pitch + this.kick.pitch + shake.y - (hr.pitch - REST_HEAD.pitch) * 0.55,
+      yaw + shake.x + (hr.yaw - REST_HEAD.yaw) * 0.18,
+      this.kick.roll + shake.roll - (hr.roll - REST_HEAD.roll) * 0.45,
     );
   }
 }
