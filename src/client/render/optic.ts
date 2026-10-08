@@ -1,11 +1,17 @@
 /**
- * Cyclops' optic effects: the eye beam, the floor blast of the recoil and the
- * scorch marks they leave on floors, walls and pillars.
+ * Cyclops' optic effects: the eye beam, the floor blast of the recoil, the
+ * ricochets and the scorch marks they leave on floors, walls and pillars.
  *
  * A beam is three layered additive tubes (white-hot core, red glow, wide haze)
  * between a tail and a tip, tapered toward the eyes. Colors go above 1 so the
- * bloom pass makes them burn. When the bolt ends, the tail runs into the tip
- * and the beam goes out.
+ * bloom pass makes them burn. A ricochet bends at every bounce: the beam is
+ * then a chain of tubes along the path, its tail following the bolt around
+ * the corners. When the bolt ends, the tail runs into the tip and the beam
+ * goes out.
+ *
+ * The visor's computed shot (the ricochet super) is drawn before it fires:
+ * thin lines trace the path segment by segment, bounce points light up and a
+ * reticle closes on the target.
  */
 import * as THREE from 'three';
 import type { ArenaDef } from '../../core/physics';
@@ -18,15 +24,33 @@ const FADE = 0.16;
 const MAX_SCORCH = 32;
 
 const hdr = (r: number, g: number, b: number): THREE.Color => new THREE.Color().setRGB(r, g, b);
-const LAYERS = [
+interface Layer {
+  color: THREE.Color;
+  r: number;
+  opacity: number;
+}
+const LAYERS: Layer[] = [
   { color: hdr(2.4, 1.45, 1.3), r: 0.028, opacity: 1 },
   { color: hdr(1.8, 0.09, 0.04), r: 0.075, opacity: 0.8 },
   { color: hdr(0.55, 0.02, 0.01), r: 0.2, opacity: 0.35 },
 ];
+/** The visor at full power (ricochet super): a white-gold core in a burning sheath. */
+const SUPER_LAYERS: Layer[] = [
+  { color: hdr(3, 2.4, 1.5), r: 0.036, opacity: 1 },
+  { color: hdr(2.4, 0.55, 0.06), r: 0.095, opacity: 0.85 },
+  { color: hdr(1, 0.16, 0.02), r: 0.27, opacity: 0.4 },
+];
+export type BeamStyle = 'optic' | 'super';
+const STYLE: Record<BeamStyle, Layer[]> = { optic: LAYERS, super: SUPER_LAYERS };
 
 /** Open tube, thin at the tail (y = -0.5), full width at the tip. */
 const tubeGeo = new THREE.CylinderGeometry(1, 0.3, 1, 18, 1, true);
+/** The same without the taper, for the middle of a bent beam. */
+const pipeGeo = new THREE.CylinderGeometry(1, 1, 1, 18, 1, true);
+/** Thin line of the computed path. */
+const lineGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true);
 const decalGeo = new THREE.PlaneGeometry(1, 1);
+const FIRE = [0xffe08a, 0xffa040, 0xff6a20, 0xff3a10];
 
 function canvasTexture(size: number, draw: (g: CanvasRenderingContext2D, s: number) => void): THREE.Texture {
   const c = document.createElement('canvas');
@@ -36,6 +60,25 @@ function canvasTexture(size: number, draw: (g: CanvasRenderingContext2D, s: numb
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+
+/** Targeting reticle: a ring with four ticks. */
+const reticleTexture = (): THREE.Texture =>
+  canvasTexture(128, (g, s) => {
+    const c = s / 2;
+    g.strokeStyle = 'rgba(255,255,255,1)';
+    g.lineWidth = 5;
+    g.beginPath();
+    g.arc(c, c, s * 0.34, 0, Math.PI * 2);
+    g.stroke();
+    g.lineWidth = 7;
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2;
+      g.beginPath();
+      g.moveTo(c + Math.cos(a) * s * 0.26, c + Math.sin(a) * s * 0.26);
+      g.lineTo(c + Math.cos(a) * s * 0.47, c + Math.sin(a) * s * 0.47);
+      g.stroke();
+    }
+  });
 
 const glowTexture = (): THREE.Texture =>
   canvasTexture(128, (g, s) => {
@@ -85,11 +128,16 @@ const emberTexture = (): THREE.Texture =>
 
 interface Beam {
   group: THREE.Group;
-  meshes: THREE.Mesh[];
+  /** Tube layers of each visible segment, tail first. */
+  segs: THREE.Mesh[][];
   mats: THREE.MeshBasicMaterial[];
+  layers: Layer[];
+  style: BeamStyle;
   head: THREE.Sprite;
   tail: THREE.Vector3;
   tip: THREE.Vector3;
+  /** Bounce points between the eyes and the tip (ricochets). */
+  bends: THREE.Vector3[];
   /** Where the beam leaves the eyes (moves with the shooter while it fires). */
   origin: THREE.Vector3;
   width: number;
@@ -108,10 +156,66 @@ interface Scorch {
   t: number;
 }
 
+/** The visor's computed path, drawn before the shot. */
+interface Calc {
+  group: THREE.Group;
+  points: THREE.Vector3[];
+  lines: THREE.Mesh[];
+  marks: THREE.Sprite[];
+  reticle: THREE.Sprite;
+  dot: THREE.Sprite;
+  mat: THREE.MeshBasicMaterial;
+  t: number;
+  /** Seconds until the beam fires along it. */
+  dur: number;
+  /** Fading out (seconds left), null while it is drawn. */
+  fade: number | null;
+  length: number;
+}
+
+/** Visible part of a polyline: its last `len` meters, ending at the last point. */
+function tailOf(points: readonly THREE.Vector3[], len: number): THREE.Vector3[] {
+  const out: THREE.Vector3[] = [points[points.length - 1].clone()];
+  let left = len;
+  for (let i = points.length - 1; i > 0 && left > 1e-4; i--) {
+    const a = points[i - 1];
+    const b = points[i];
+    const d = a.distanceTo(b);
+    if (d <= left) {
+      out.unshift(a.clone());
+      left -= d;
+    } else {
+      out.unshift(b.clone().lerp(a, left / Math.max(d, 1e-6)));
+      left = 0;
+    }
+  }
+  return out;
+}
+
+const polyLength = (pts: readonly THREE.Vector3[]): number => {
+  let l = 0;
+  for (let i = 1; i < pts.length; i++) l += pts[i - 1].distanceTo(pts[i]);
+  return l;
+};
+
+/** Point at distance `d` along a polyline. */
+function along(pts: readonly THREE.Vector3[], d: number): THREE.Vector3 {
+  let left = d;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = pts[i - 1].distanceTo(pts[i]);
+    if (left <= seg) return pts[i - 1].clone().lerp(pts[i], seg > 1e-6 ? left / seg : 0);
+    left -= seg;
+  }
+  return pts[pts.length - 1].clone();
+}
+
 export class OpticFx {
   private readonly beams = new Map<number | string, Beam>();
   private readonly scorches: Scorch[] = [];
+  private readonly calcs: Calc[] = [];
+  private preview: { group: THREE.Group; lines: THREE.Mesh[]; marks: THREE.Sprite[]; mat: THREE.MeshBasicMaterial } | null = null;
   private readonly glowTex = glowTexture();
+  private readonly ringTex = reticleTexture();
   private readonly scorchTex = scorchTexture();
   private readonly emberTex = emberTexture();
   private nextStatic = 0;
@@ -123,39 +227,84 @@ export class OpticFx {
     private readonly arena: ArenaDef,
   ) {}
 
-  private makeBeam(origin: THREE.Vector3, tip: THREE.Vector3, width: number, fixed: boolean): Beam {
+  private makeBeam(origin: THREE.Vector3, tip: THREE.Vector3, width: number, fixed: boolean, style: BeamStyle = 'optic'): Beam {
     const group = new THREE.Group();
-    const meshes: THREE.Mesh[] = [];
-    const mats: THREE.MeshBasicMaterial[] = [];
-    for (const l of LAYERS) {
-      const mat = new THREE.MeshBasicMaterial({
-        color: l.color,
+    const layers = STYLE[style];
+    const mats = layers.map(
+      (l) =>
+        new THREE.MeshBasicMaterial({
+          color: l.color,
+          transparent: true,
+          opacity: l.opacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+        }),
+    );
+    const head = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.glowTex,
+        color: style === 'super' ? hdr(2.6, 1.2, 0.3) : hdr(2.2, 0.4, 0.25),
         transparent: true,
-        opacity: l.opacity,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-      });
-      const mesh = new THREE.Mesh(tubeGeo, mat);
-      mesh.frustumCulled = false;
-      group.add(mesh);
-      meshes.push(mesh);
-      mats.push(mat);
-    }
-    const head = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: this.glowTex, color: hdr(2.2, 0.4, 0.25), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }),
+      }),
     );
     group.add(head);
     this.scene.add(group);
-    return { group, meshes, mats, head, tail: origin.clone(), tip: tip.clone(), origin: origin.clone(), width, fade: null, fadeMax: FADE, fixed, owner: -1 };
+    return {
+      group,
+      segs: [],
+      mats,
+      layers,
+      style,
+      head,
+      tail: origin.clone(),
+      tip: tip.clone(),
+      bends: [],
+      origin: origin.clone(),
+      width,
+      fade: null,
+      fadeMax: FADE,
+      fixed,
+      owner: -1,
+    };
+  }
+
+  /** Tube layers for segment `i` of a beam (created on demand). */
+  private segment(b: Beam, i: number): THREE.Mesh[] {
+    while (b.segs.length <= i) {
+      const geo = b.segs.length === 0 ? tubeGeo : pipeGeo;
+      const meshes = b.mats.map((m) => {
+        const mesh = new THREE.Mesh(geo, m);
+        mesh.frustumCulled = false;
+        b.group.add(mesh);
+        return mesh;
+      });
+      b.segs.push(meshes);
+    }
+    return b.segs[i];
   }
 
   /** A bolt leaves `owner`'s eyes (keyed by projectile id). */
-  fire(id: number, owner: number, origin: THREE.Vector3, tip: THREE.Vector3, width = 1): void {
-    this.beams.get(id)?.group.removeFromParent();
-    const b = this.makeBeam(origin, tip, width, false);
+  fire(id: number, owner: number, origin: THREE.Vector3, tip: THREE.Vector3, width = 1, style: BeamStyle = 'optic'): void {
+    const old = this.beams.get(id);
+    if (old) this.dispose(old);
+    const b = this.makeBeam(origin, tip, width, false, style);
     b.owner = owner;
     this.beams.set(id, b);
+  }
+
+  /** A ricochet bounced at `at`: the beam bends there. */
+  bend(id: number, at: THREE.Vector3): void {
+    const b = this.beams.get(id);
+    if (b && b.fade === null) b.bends.push(at.clone());
+  }
+
+  private dispose(b: Beam): void {
+    b.group.removeFromParent();
+    for (const m of b.mats) m.dispose();
+    (b.head.material as THREE.SpriteMaterial).dispose();
   }
 
   has(id: number): boolean {
@@ -182,11 +331,17 @@ export class OpticFx {
     b.fade = FADE;
   }
 
-  /** Direction a beam travels (eyes to tip). */
+  /** Direction a beam travels (its last leg: eyes or last bounce to tip). */
   direction(id: number): THREE.Vector3 {
     const b = this.beams.get(id);
-    const d = b ? b.tip.clone().sub(b.origin) : new THREE.Vector3(0, 0, -1);
+    const from = b ? (b.bends[b.bends.length - 1] ?? b.origin) : null;
+    const d = b && from ? b.tip.clone().sub(from) : new THREE.Vector3(0, 0, -1);
     return d.lengthSq() > 1e-8 ? d.normalize() : new THREE.Vector3(0, 0, -1);
+  }
+
+  /** Style of a live beam (null when there is none). */
+  styleOf(id: number): BeamStyle | null {
+    return this.beams.get(id)?.style ?? null;
   }
 
   /** Ends live bolts whose projectile no longer exists. */
@@ -238,6 +393,162 @@ export class OpticFx {
     fx.spark(at, { color: 0xfff0e0, count: 10, speed: 10, size: 0.05, gravity: 4, life: 0.2 });
     fx.shock(at.clone().addScaledVector(normal, 0.03), normal, 0xff5a30, 1.8, 0.32, 0.85);
     this.scorch(at, normal, 1.3);
+  }
+
+  /** A ricochet glances off a surface: a hot spark burst along the new path, a ring, a scorch. */
+  ricochet(at: THREE.Vector3, normal: THREE.Vector3, out: THREE.Vector3, style: BeamStyle): void {
+    const fx = this.fx;
+    const hot = style === 'super';
+    fx.flash(at, hot ? 0xffa040 : 0xff4a2a, hot ? 2.6 : 1.9, 0.14);
+    fx.star(at, hot ? 0xffe0a0 : 0xffb090, hot ? 1.7 : 1.15, 0.13);
+    fx.shock(at.clone().addScaledVector(normal, 0.03), normal, hot ? 0xffb050 : 0xff5a30, hot ? 2.4 : 1.7, 0.3, 0.9);
+    // Sparks leave with the beam, molten drops fall off the wall.
+    fx.spark(at, { color: hot ? 0xffd080 : 0xff8050, count: hot ? 34 : 24, speed: 11, size: 0.07, gravity: 5, life: 0.38, dir: out.clone().add(normal.clone().multiplyScalar(0.4)).normalize(), spread: 0.45 });
+    fx.spark(at, { color: 0xff6a30, count: 14, speed: 4, size: 0.09, gravity: 12, life: 0.6, dir: normal, spread: 0.9 });
+    if (hot) fx.spark(at, { color: FIRE[Math.floor(Math.random() * FIRE.length)], count: 12, speed: 2.2, size: 0.22, gravity: -4, life: 0.5, dir: normal, spread: 0.8 });
+    this.scorch(at, normal, hot ? 1.5 : 1.15);
+  }
+
+  // ------------------------------------------------------------------ computed path
+
+  /**
+   * The visor computes the shot: thin lines run along the path segment by
+   * segment, the bounce points light up, a reticle closes on the target.
+   * `dur`: seconds until the beam fires.
+   */
+  calc(points: THREE.Vector3[], dur: number): void {
+    const group = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color: hdr(2.2, 0.7, 0.15), transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending });
+    const lines = points.slice(1).map(() => {
+      const m = new THREE.Mesh(lineGeo, mat);
+      m.frustumCulled = false;
+      m.visible = false;
+      group.add(m);
+      return m;
+    });
+    const sprite = (color: THREE.Color, size: number): THREE.Sprite => {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      sp.scale.setScalar(size);
+      sp.visible = false;
+      group.add(sp);
+      return sp;
+    };
+    const marks = points.slice(1, -1).map((p) => {
+      const sp = sprite(hdr(2.6, 1.1, 0.3), 0.45);
+      sp.position.copy(p);
+      return sp;
+    });
+    const reticle = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: this.ringTex, color: hdr(2.6, 0.5, 0.15), transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending }),
+    );
+    reticle.position.copy(points[points.length - 1]);
+    reticle.visible = false;
+    reticle.renderOrder = 9;
+    group.add(reticle);
+    const dot = sprite(hdr(3, 2, 1.2), 0.22);
+    this.scene.add(group);
+    this.calcs.push({ group, points, lines, marks, reticle, dot, mat, t: 0, dur, fade: null, length: polyLength(points) });
+  }
+
+  /** The beam left: the computed lines go out. */
+  endCalc(): void {
+    for (const c of this.calcs) if (c.fade === null) c.fade = 0.25;
+  }
+
+  /**
+   * Laser sight of a plain ricochet while it winds up (local player): where a
+   * bank shot fired right now would go. Null hides it.
+   */
+  aimPreview(points: THREE.Vector3[] | null): void {
+    if (!points || points.length < 2) {
+      if (this.preview) this.preview.group.visible = false;
+      return;
+    }
+    if (!this.preview) {
+      const group = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color: hdr(1.6, 0.12, 0.06), transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending });
+      this.preview = { group, lines: [], marks: [], mat };
+      this.scene.add(group);
+    }
+    const pv = this.preview;
+    pv.group.visible = true;
+    while (pv.lines.length < points.length - 1) {
+      const m = new THREE.Mesh(lineGeo, pv.mat);
+      m.frustumCulled = false;
+      pv.group.add(m);
+      pv.lines.push(m);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: hdr(2.2, 0.4, 0.2), transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+      sp.scale.setScalar(0.22);
+      pv.group.add(sp);
+      pv.marks.push(sp);
+    }
+    pv.mat.opacity = 0.32 + 0.1 * Math.sin(this.time * 30);
+    pv.lines.forEach((m, i) => {
+      const ok = i < points.length - 1;
+      m.visible = ok;
+      pv.marks[i].visible = ok && i < points.length - 2;
+      if (!ok) return;
+      this.placeLine(m, points[i], points[i + 1], 0.014);
+      pv.marks[i].position.copy(points[i + 1]);
+    });
+  }
+
+  private placeLine(m: THREE.Mesh, a: THREE.Vector3, b: THREE.Vector3, r: number): void {
+    const d = b.clone().sub(a);
+    const l = d.length();
+    if (l < 1e-5) {
+      m.visible = false;
+      return;
+    }
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(UP, d.divideScalar(l));
+    m.scale.set(r, l, r);
+  }
+
+  private updateCalcs(dt: number): void {
+    for (let i = this.calcs.length - 1; i >= 0; i--) {
+      const c = this.calcs[i];
+      c.t += dt;
+      if (c.fade !== null) c.fade -= dt;
+      if ((c.fade !== null && c.fade <= 0) || c.t > c.dur + 1.5) {
+        c.group.removeFromParent();
+        c.mat.dispose();
+        for (const sp of [...c.marks, c.reticle, c.dot]) (sp.material as THREE.SpriteMaterial).dispose();
+        this.calcs.splice(i, 1);
+        continue;
+      }
+      const k = c.fade !== null ? Math.max(0, c.fade / 0.25) : 1;
+      // The path is traced over the first half of the wind-up, then it holds and flickers.
+      const drawn = Math.min(1, c.t / Math.max(0.05, c.dur * 0.5)) * c.length;
+      let acc = 0;
+      c.lines.forEach((m, j) => {
+        const a = c.points[j];
+        const b = c.points[j + 1];
+        const seg = a.distanceTo(b);
+        const shown = Math.max(0, Math.min(seg, drawn - acc));
+        m.visible = shown > 1e-3;
+        if (m.visible) this.placeLine(m, a, a.clone().lerp(b, shown / Math.max(seg, 1e-6)), 0.026 + 0.008 * Math.sin(this.time * 40 + j));
+        if (j < c.marks.length) {
+          const lit = drawn >= acc + seg;
+          c.marks[j].visible = lit;
+          c.marks[j].scale.setScalar(0.42 + 0.14 * Math.sin(this.time * 18 + j));
+          (c.marks[j].material as THREE.SpriteMaterial).opacity = k;
+        }
+        acc += seg;
+      });
+      c.mat.opacity = (0.55 + 0.35 * Math.sin(this.time * 33)) * k;
+      // The reticle closes on the target once the whole path is drawn.
+      const done = drawn >= c.length - 1e-3;
+      c.reticle.visible = done;
+      const close = Math.min(1, Math.max(0, (c.t - c.dur * 0.5) / (c.dur * 0.4)));
+      c.reticle.scale.setScalar(1.6 - close * 0.9);
+      (c.reticle.material as THREE.SpriteMaterial).opacity = k * (0.6 + 0.4 * Math.sin(this.time * 25));
+      (c.reticle.material as THREE.SpriteMaterial).rotation = this.time * 2;
+      // A bright dot runs the path, again and again.
+      c.dot.visible = drawn > 0.1;
+      c.dot.position.copy(along(c.points, ((c.t * 70) % c.length) * (drawn / c.length)));
+      (c.dot.material as THREE.SpriteMaterial).opacity = k;
+    }
   }
 
   /** Which surface a point lies on (floor, wall or pillar): its normal and the point on it, or null in mid-air. */
@@ -297,45 +608,64 @@ export class OpticFx {
   /** `eye`: the camera; glows right in front of it are faded so they never fill the view. */
   update(dt: number, eye: THREE.Vector3): void {
     this.time += dt;
+    this.updateCalcs(dt);
     for (const [id, b] of this.beams) {
       let k = 1;
       if (b.fade !== null) {
         b.fade -= dt;
         if (b.fade <= 0) {
-          b.group.removeFromParent();
-          for (const m of b.mats) m.dispose();
-          (b.head.material as THREE.SpriteMaterial).dispose();
+          this.dispose(b);
           this.beams.delete(id);
           continue;
         }
         k = b.fade / b.fadeMax;
       }
-      // Tail: at the eyes while the beam is short, then it trails the bolt.
-      const dir = b.tip.clone().sub(b.origin);
-      const full = dir.length();
+      // The path so far: eyes, every bounce, tip. Only its last stretch is lit:
+      // the tail stays at the eyes while the beam is short, then trails the bolt.
+      const path = [b.origin, ...b.bends, b.tip];
+      const full = polyLength(path);
       if (full < 1e-4) continue;
-      dir.divideScalar(full);
-      let len = Math.min(full, MAX_LEN);
+      let len = Math.min(full, MAX_LEN * (b.style === 'super' ? 1.4 : 1));
       // Burning out: the tail runs into the tip (static beams just thin out).
       if (b.fade !== null && !b.fixed) len *= k * k;
-      b.tail.copy(b.tip).addScaledVector(dir, -len);
+      const vis = tailOf(path, len);
+      b.tail.copy(vis[0]);
       const flicker = 0.85 + 0.15 * Math.sin(this.time * 90 + full) + 0.08 * Math.sin(this.time * 37);
       const w = b.width * flicker * (b.fade !== null ? 0.4 + 0.6 * k : 1);
-      const mid = b.tail.clone().add(b.tip).multiplyScalar(0.5);
-      b.meshes.forEach((m, i) => {
-        m.position.copy(mid);
-        m.quaternion.setFromUnitVectors(UP, dir);
-        m.scale.set(LAYERS[i].r * w, Math.max(len, 1e-3), LAYERS[i].r * w);
-        b.mats[i].opacity = LAYERS[i].opacity * k;
-      });
+      for (let j = 0; j < Math.max(b.segs.length, vis.length - 1); j++) {
+        const meshes = j < vis.length - 1 ? this.segment(b, j) : b.segs[j];
+        if (j >= vis.length - 1) {
+          for (const m of meshes) m.visible = false;
+          continue;
+        }
+        const a = vis[j];
+        const c = vis[j + 1];
+        const dir = c.clone().sub(a);
+        const l = dir.length();
+        const mid = a.clone().add(c).multiplyScalar(0.5);
+        meshes.forEach((m, i) => {
+          m.visible = l > 1e-4;
+          if (!m.visible) return;
+          m.position.copy(mid);
+          m.quaternion.setFromUnitVectors(UP, dir.clone().divideScalar(l));
+          m.scale.set(b.layers[i].r * w, Math.max(l, 1e-3), b.layers[i].r * w);
+        });
+      }
+      b.mats.forEach((m, i) => (m.opacity = b.layers[i].opacity * k));
       b.head.position.copy(b.tip);
-      b.head.scale.setScalar(0.5 * w * (b.fade !== null ? 1 + (1 - k) * 0.8 : 1));
+      b.head.scale.setScalar((b.style === 'super' ? 0.7 : 0.5) * w * (b.fade !== null ? 1 + (1 - k) * 0.8 : 1));
       const near = Math.min(1, Math.max(0, (b.tip.distanceTo(eye) - 1.2) / 2.5));
       (b.head.material as THREE.SpriteMaterial).opacity = k * near;
-      // Embers peel off the beam.
+      // Embers peel off the beam; the super one trails fire.
       if (b.fade === null || b.fixed) {
-        const at = b.tail.clone().lerp(b.tip, Math.random());
+        const at = along(vis, Math.random() * len);
         this.fx.spark(at, { color: 0xff5a30, count: 1, speed: 1.2, size: 0.07, gravity: -1.5, life: 0.35 });
+        if (b.style === 'super') {
+          for (let n = 0; n < 2; n++) {
+            const p = along(vis, Math.random() * len);
+            this.fx.spark(p, { color: FIRE[Math.floor(Math.random() * FIRE.length)], count: 1, speed: 1.4, size: 0.2, gravity: -5, life: 0.4 });
+          }
+        }
       }
     }
     for (let i = this.scorches.length - 1; i >= 0; i--) {

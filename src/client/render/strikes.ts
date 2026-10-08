@@ -780,6 +780,215 @@ function opticRecoil(c: Ctx): void {
   c.stiff = 30;
 }
 
+/**
+ * Ricochet (bank shot): the free arm points down the line, the head tilts as
+ * if measuring the angle, two fingers on the visor; then the shot snaps the
+ * head back. Seen from inside, the pointing hand sits low in the view.
+ */
+function opticBank(c: Ctx): void {
+  const { p, g, b, fp } = c;
+  const at = 1.98;
+  const kick = 2.12;
+  const temple = visorHand(c);
+  const point = fp ? v(-0.12 * b.w, 1.36 * b.s, 0.58 * b.s) : v(-0.06 * b.w, 1.5 * b.s, 0.64 * b.s);
+  const back = v(0, 0.025, -0.08);
+  p.rHand = path([[0, g.rHand], [0.6, temple], [at, temple, lin], [kick, add(temple, back), easeOut], [2.55, temple], [3, g.rHand]], c.tau);
+  p.lHand = path([[0, g.lHand], [0.6, point], [at, point, lin], [kick, add(point, mul(back, 1.3)), easeOut], [2.6, v(-0.15 * b.w, 1.4 * b.s, 0.36 * b.s)], [3, g.lHand]], c.tau);
+  set(c, 'lElbow', tr([[0, 0], [0.6, -0.15], [2.4, -0.15], [3, 0]], c.tau));
+  set(c, 'rElbow', tr([[0, 0], [0.6, 1], [2.6, 1], [3, 0]], c.tau));
+  set(c, 'twist', tr([[0, g.twist], [0.6, -0.42], [at, -0.32, lin], [kick, -0.16, easeOut], [3, g.twist]], c.tau));
+  // Measuring the angle: the head tilts and scans along the line, then locks.
+  set(c, 'headRoll', tr([[0, 0], [0.6, fp ? 0.07 : 0.18], [1.5, fp ? 0.05 : 0.12], [at, 0.06], [2.4, 0], [3, 0]], c.tau));
+  set(c, 'headYaw', tr([[0, 0], [0.6, fp ? 0 : 0.16], [1.1, fp ? 0 : -0.1], [1.6, fp ? 0 : 0.05], [at, 0], [3, 0]], c.tau));
+  set(c, 'lean', tr([[0, g.lean], [0.6, fp ? 0.1 : 0.14], [at, fp ? 0.11 : 0.16, lin], [kick, fp ? -0.05 : -0.18, easeOut], [2.55, 0], [3, g.lean]], c.tau));
+  set(c, 'headPitch', tr([[0, g.headPitch], [0.6, g.headPitch + (fp ? 0.02 : 0.08)], [at, g.headPitch + (fp ? 0.03 : 0.1), lin], [kick, g.headPitch - (fp ? 0.1 : 0.26), easeOut], [2.55, g.headPitch - 0.04], [3, g.headPitch]], c.tau));
+  set(c, 'hipZ', tr([[0, 0], [0.6, 0.02], [at, 0.02, lin], [kick, -0.09, easeOut], [2.5, -0.03], [3, 0]], c.tau));
+  if (!c.f.grounded) {
+    p.lFoot = v(-0.14 * b.w, 0.38 * b.s, 0.16 * b.s);
+    p.rFoot = v(0.15 * b.w, 0.5 * b.s, -0.06 * b.s);
+  } else {
+    step(c, 'lFoot', v(0, 0, 0.06), v(0, 0, 0.08), HEAVY);
+    step(c, 'rFoot', v(0, 0, -0.03), v(0.03, 0, -0.1), HEAVY);
+    set(c, 'rHeel', tr([[0, g.rHeel], [0.6, 0.25], [2.6, 0.1], [3, g.rHeel]], c.tau));
+  }
+  c.stiff = c.tau < 2 ? 24 : c.tau < 2.3 ? 60 : 18;
+}
+
+/**
+ * Computed ricochet (super): squared up, fingers of both hands on the visor,
+ * the head scans fast in little jerks while the visor computes the path, then
+ * locks; the shot throws the whole body back.
+ */
+function opticCalc(c: Ctx): void {
+  const { p, g, b, fp, tau } = c;
+  const at = 1.98;
+  const kick = 2.14;
+  const tR = fp ? v(0.45 * b.w, 1.75 * b.s, -0.05 * b.s) : v(0.13 * b.w, 1.66 * b.s, 0.1 * b.s);
+  const tL = fp ? v(-0.45 * b.w, 1.75 * b.s, -0.05 * b.s) : v(-0.12 * b.w, 1.67 * b.s, 0.1 * b.s);
+  const flungR = fp ? v(0.42 * b.w, 1.25 * b.s, 0.3 * b.s) : v(0.42 * b.w, 1.5 * b.s, 0.02 * b.s);
+  const flungL = fp ? v(-0.42 * b.w, 1.25 * b.s, 0.3 * b.s) : v(-0.42 * b.w, 1.52 * b.s, 0.02 * b.s);
+  p.rHand = path([[0, g.rHand], [0.45, tR], [at, tR, lin], [kick, flungR, easeOut], [2.6, flungR], [3, g.rHand]], tau);
+  p.lHand = path([[0, g.lHand], [0.45, tL], [at, tL, lin], [kick, flungL, easeOut], [2.6, flungL], [3, g.lHand]], tau);
+  set(c, 'rElbow', tr([[0, 0], [0.45, 1], [at, 1], [kick, 0.4], [3, 0]], tau));
+  set(c, 'lElbow', tr([[0, 0], [0.45, 1], [at, 1], [kick, 0.4], [3, 0]], tau));
+  set(c, 'twist', tr([[0, g.twist], [0.45, 0], [2.6, 0], [3, g.twist]], tau));
+  // The visor scans: quick jerks left and right, smaller and smaller, then locked.
+  const scan = fp ? 0 : 1;
+  set(c, 'headYaw', tr([[0, 0], [0.25, 0.3 * scan, lin], [0.4, -0.26 * scan, lin], [0.55, 0.2 * scan, lin], [0.7, -0.14 * scan, lin], [0.85, 0.07 * scan, lin], [1, 0, lin]], tau));
+  set(c, 'headPitch', tr([[0, g.headPitch], [0.3, g.headPitch - 0.08 * scan], [0.6, g.headPitch + 0.1 * scan], [1, g.headPitch + 0.04], [at, g.headPitch + 0.06, lin], [kick, g.headPitch - (fp ? 0.14 : 0.42), easeOut], [2.6, g.headPitch - 0.06], [3, g.headPitch]], tau));
+  set(c, 'lean', tr([[0, g.lean], [0.45, 0.12], [at, 0.15, lin], [kick, fp ? -0.08 : -0.38, easeOut], [2.6, -0.05], [3, g.lean]], tau));
+  set(c, 'hipZ', tr([[0, 0], [at, 0.02], [kick, -0.16, easeOut], [2.6, -0.06], [3, 0]], tau));
+  set(c, 'hipY', tr([[0, g.hipY], [0.45, g.hipY - 0.1], [at, g.hipY - 0.1], [kick, g.hipY - 0.15], [2.6, g.hipY - 0.08], [3, g.hipY]], tau));
+  set(c, 'roll', tr([[0, 0], [0.5, 0.03], [1, -0.02], [3, 0]], tau));
+  if (!c.f.grounded) {
+    p.lFoot = v(-0.16 * b.w, 0.36 * b.s, 0.16 * b.s);
+    p.rFoot = v(0.17 * b.w, 0.46 * b.s, -0.04 * b.s);
+  } else {
+    // A wide, squared stance braced for the blast.
+    const lF = v(-0.25 * b.w, 0, 0.12 * b.s);
+    const rF = v(0.25 * b.w, 0, -0.1 * b.s);
+    p.lFoot = path([[0, g.lFoot], [0.45, lF], [at, lF], [kick, add(lF, v(0, 0, -0.06))], [3, g.lFoot]], tau);
+    p.rFoot = path([[0, g.rFoot], [0.45, rF], [at, rF], [kick, add(rF, v(0, 0, -0.1))], [3, g.rFoot]], tau);
+    set(c, 'lToe', tr([[0, g.lToe], [0.45, 0.1], [2.6, 0.1], [3, g.lToe]], tau));
+    set(c, 'rToe', tr([[0, g.rToe], [0.45, 0.15], [2.6, 0.15], [3, g.rToe]], tau));
+  }
+  set(c, 'glow', tr([[0, 0.2], [1, 0.6], [at, 1], [2.3, 0.7], [3, 0.3]], tau));
+  c.stiff = tau < 1 ? 40 : tau < 2 ? 26 : tau < 2.3 ? 70 : 16;
+}
+
+/**
+ * Cyclone kick: crouch and coil, jump into a whirl with the kicking knee
+ * chambered and the arms pulled in, the leg opens right at the end of the
+ * first turn and scythes through the target, then the spin runs out in the
+ * air and the landing sinks into the knees. From inside: no spin (the camera
+ * is yours), the leg whips across under the view.
+ */
+function cyclone(c: Ctx): void {
+  const { p, g, b, side, A, B, tau } = c;
+  const F = footOf(side);
+  const S = footOf(-side);
+  // Hop (visual only: the simulation keeps the feet on the floor).
+  set(c, 'hipY', tr([[0, g.hipY], [0.45, g.hipY - 0.14], [0.65, g.hipY - 0.12], [1, g.hipY + 0.22, easeOut], [c.tauA, g.hipY + 0.3], [2, g.hipY + 0.32], [2.3, g.hipY + 0.12], [2.55, g.hipY - 0.12, easeIn], [3, g.hipY]], tau));
+  const tuck = v(-side * 0.1 * b.w, 0.42 * b.s, 0.08 * b.s);
+  p[S] = path([[0, g[S]], [0.6, add(g[S], v(0, 0, 0.02))], [1, v(-side * 0.12 * b.w, 0.22 * b.s, 0.06 * b.s)], [c.tauA, tuck], [2.2, tuck], [2.55, v(-side * 0.17 * b.w, 0, 0.14 * b.s), easeIn], [3, g[S]]], tau);
+  if (c.fp) {
+    roundhouse(c);
+    set(c, 'hipY', tr([[0, g.hipY], [0.6, g.hipY - 0.1], [1, g.hipY + 0.12], [2, g.hipY + 0.16], [2.55, g.hipY - 0.08], [3, g.hipY]], tau));
+    return;
+  }
+  // The extended leg sits out to its own side; the spin carries it through the hitbox.
+  const out = v(side * 0.95 * b.w, 1.45 * b.s, 0.17 * b.s);
+  const aOut = Math.atan2(out.x, out.z);
+  const pa = Math.atan2(A.x, A.z);
+  const pb = Math.atan2(B.x, B.z);
+  const dir = Math.sign(wrap(pb - pa)) || -side;
+  const toward = (target: number, min: number): number => {
+    let sp = wrap(target - aOut);
+    while (dir * sp < min) sp += dir * Math.PI * 2;
+    return sp;
+  };
+  // A whole turn before the leg opens, the sweep through the target, the second turn runs out.
+  const sA = toward(pa, Math.PI * 1.6);
+  const sB = toward(pb, Math.abs(sA) + 0.3);
+  const end = dir * Math.PI * 4;
+  // Coil the other way, then the whirl starts with the take-off and gathers speed.
+  p.spin = tr([[0, 0], [0.45, -dir * 0.4], [0.65, -dir * 0.3, lin], [1, sA * 0.45, easeIn], [c.tauA, sA, lin], [2, sB, lin], [2.6, end, easeOut], [3, end]], tau);
+  const chamber = v(side * 0.3 * b.w, 0.95 * b.s, -0.06 * b.s);
+  p[F] = path([[0, g[F]], [0.6, add(g[F], v(0, 0.02, 0.04))], [1, chamber], [c.tauA - 0.12, chamber], [c.tauA, out, easeOut], [2, out], [2.3, v(side * 0.28 * b.w, 0.75 * b.s, 0)], [2.55, v(side * 0.18 * b.w, 0, -0.15 * b.s), easeIn], [3, g[F]]], tau);
+  set(c, kneeOf(side), tr([[0, 0], [1, 0.9], [c.tauA - 0.12, 0.9], [c.tauA, 0.15], [2, -0.85], [2.4, -0.4], [3, 0]], tau));
+  set(c, kneeOf(-side), tr([[0, 0], [1, 0.3], [2.3, 0.3], [3, 0]], tau));
+  set(c, 'hipTurn', tr([[0, 0], [1, -side * 0.1], [c.tauA, side * 0.6], [2, side * 1.05], [2.4, side * 0.4], [3, 0]], tau));
+  set(c, 'lean', tr([[0, g.lean], [0.6, 0.22], [1, 0.02], [c.tauA, -0.18], [2, -0.36], [2.4, -0.1], [2.55, 0.22], [3, g.lean]], tau));
+  set(c, 'roll', tr([[0, 0], [1, side * 0.05], [c.tauA, -side * 0.2], [2, -side * 0.38], [2.4, -side * 0.1], [3, 0]], tau));
+  set(c, 'headRoll', tr([[0, 0], [c.tauA, side * 0.18], [2, side * 0.3], [2.5, 0.05], [3, 0]], tau));
+  // Spotting: the head leads the turn and finds the target first.
+  set(c, 'headYaw', tr([[0, 0], [0.6, 0], [1.1, dir * 0.5], [c.tauA, dir * 0.25], [2, 0], [3, 0]], tau));
+  set(c, 'headPitch', tr([[0, g.headPitch], [0.6, g.headPitch + 0.12], [2, g.headPitch + 0.1], [2.55, g.headPitch + 0.2], [3, g.headPitch]], tau));
+  // Arms pulled in to whirl, flung out for balance as the leg opens.
+  const H = handOf(side);
+  const O = handOf(-side);
+  p[H] = path([[0, g[H]], [0.6, v(side * 0.3 * b.w, 1.0 * b.s, -0.1 * b.s)], [1, v(side * 0.12 * b.w, 1.32 * b.s, 0.12 * b.s)], [c.tauA, v(side * 0.12 * b.w, 1.32 * b.s, 0.12 * b.s)], [2, v(side * 0.35 * b.w, 1.18 * b.s, -0.28 * b.s), easeOut], [2.5, v(side * 0.3 * b.w, 1.2 * b.s, -0.1 * b.s)], [3, g[H]]], tau);
+  p[O] = path([[0, g[O]], [0.6, v(-side * 0.32 * b.w, 1.05 * b.s, 0.05 * b.s)], [1, v(-side * 0.1 * b.w, 1.38 * b.s, 0.16 * b.s)], [c.tauA, v(-side * 0.1 * b.w, 1.38 * b.s, 0.16 * b.s)], [2, v(-side * 0.48 * b.w, 1.48 * b.s, 0.12 * b.s), easeOut], [2.5, v(-side * 0.3 * b.w, 1.42 * b.s, 0.2 * b.s)], [3, g[O]]], tau);
+  set(c, elbowOf(side), tr([[0, 0], [1, -0.4], [2, 0.6], [3, 0]], tau));
+  set(c, elbowOf(-side), tr([[0, 0], [1, -0.4], [2, 0.8], [3, 0]], tau));
+  set(c, heelOf(-side), tr([[0, g[heelOf(-side)]], [0.6, 0.6], [1, 1], [2.5, 0], [3, g[heelOf(-side)]]], tau));
+  c.stiff = tau < 0.6 ? 30 : tau < 2.55 ? 70 : 20;
+}
+
+/**
+ * Point-blank optic: the lead hand shoots out, palm to the opponent's face
+ * (measuring), the other hand to the visor; the palm sweeps aside to open
+ * the line, the head leans in and the visor discharges right in their face.
+ * The blast throws the head and shoulders back and skids the feet.
+ */
+function pointBlank(c: Ctx): void {
+  const { p, g, b, fp, tau } = c;
+  const temple = visorHand(c);
+  const reach = fp ? v(-0.04 * b.w, 1.45 * b.s, 0.62 * b.s) : v(-0.05 * b.w, 1.53 * b.s, 0.66 * b.s);
+  const aside = fp ? v(-0.5 * b.w, 1.32 * b.s, 0.45 * b.s) : v(-0.44 * b.w, 1.42 * b.s, 0.32 * b.s);
+  const flung = fp ? v(-0.48 * b.w, 1.2 * b.s, 0.3 * b.s) : v(-0.46 * b.w, 1.36 * b.s, 0.04 * b.s);
+  p.lHand = path([[0, g.lHand], [0.55, reach, easeOut], [1, reach], [1.65, aside, easeInOut], [2, aside], [2.14, flung, easeOut], [2.6, flung], [3, g.lHand]], tau);
+  p.rHand = path([[0, g.rHand], [0.55, temple], [2, temple, lin], [2.14, add(temple, v(0.04, 0.03, -0.1)), easeOut], [2.6, v(0.26 * b.w, 1.36 * b.s, 0.14 * b.s)], [3, g.rHand]], tau);
+  set(c, 'lElbow', tr([[0, 0], [0.55, -0.2], [1.65, 0.6], [2.6, 0.6], [3, 0]], tau));
+  set(c, 'rElbow', tr([[0, 0], [0.55, 1], [2.3, 1], [3, 0]], tau));
+  set(c, 'twist', tr([[0, g.twist], [0.55, -0.42], [1.65, -0.08], [2, 0], [2.14, 0.12], [3, g.twist]], tau));
+  set(c, 'lean', tr([[0, g.lean], [0.55, fp ? 0.12 : 0.22], [1, fp ? 0.14 : 0.25], [1.95, fp ? 0.16 : 0.34], [2.14, fp ? -0.1 : -0.36, easeOut], [2.6, fp ? -0.02 : -0.1], [3, g.lean]], tau));
+  set(c, 'hipZ', tr([[0, 0], [0.55, 0.06], [1.95, 0.13], [2.14, -0.15, easeOut], [2.6, -0.06], [3, 0]], tau));
+  set(c, 'headPitch', tr([[0, g.headPitch], [0.55, g.headPitch + 0.08], [1.95, g.headPitch + (fp ? 0.05 : 0.16)], [2.14, g.headPitch - (fp ? 0.16 : 0.42), easeOut], [2.6, g.headPitch - 0.08], [3, g.headPitch]], tau));
+  set(c, 'hipY', tr([[0, g.hipY], [0.55, g.hipY - 0.07], [2, g.hipY - 0.1], [2.14, g.hipY - 0.05], [3, g.hipY]], tau));
+  set(c, 'roll', tr([[0, 0], [0.55, 0.04], [2, 0], [2.14, -0.05], [3, 0]], tau));
+  // Step in with the lead foot; the blast skids the rear foot back.
+  step(c, 'lFoot', v(-0.02, 0, 0.18), v(-0.02, 0, 0.2), HEAVY);
+  p.rFoot = path([[0, g.rFoot], [0.55, add(g.rFoot, v(0, 0, 0.05))], [2, add(g.rFoot, v(0, 0, 0.05))], [2.3, add(g.rFoot, v(0.03, 0, -0.14)), easeOut], [3, g.rFoot]], tau);
+  set(c, 'rHeel', tr([[0, g.rHeel], [0.55, 0.3], [2, 0.5], [2.3, 0.8], [3, g.rHeel]], tau));
+  set(c, 'glow', tr([[0, 0], [1.5, 0], [1.95, 0.55], [2.05, 1], [2.45, 0.2], [3, 0]], tau));
+  c.stiff = tau < 1 ? 28 : tau < 2 ? 50 : tau < 2.3 ? 95 : 18;
+}
+
+/**
+ * Gene splice: sink low with the fist cocked at the hip (it burns ruby),
+ * explode upward into a jumping uppercut: the fist drives up through the
+ * target, the other arm yanks down, one knee comes up, the eyes follow the
+ * opponent into the air; hang at the top, then drop into a soft landing.
+ */
+function geneSplice(c: Ctx): void {
+  const { p, g, b, side, A, B, tau } = c;
+  const H = handOf(side);
+  const O = handOf(-side);
+  const F = footOf(side);
+  const S = footOf(-side);
+  const cocked = v(side * 0.2 * b.w, 0.86 * b.s, -0.04 * b.s);
+  const top = v(side * 0.04 * b.w, 2.18 * b.s, 0.42 * b.s);
+  p[H] = path([[0, g[H]], [0.7, cocked], [1, cocked, lin], [c.tauA, A, easeIn], [2, B, easeOut], [2.4, top, easeOut], [2.65, top], [3, g[H]]], tau);
+  p[O] = path([[0, g[O]], [0.7, v(-side * 0.16 * b.w, 1.32 * b.s, 0.42 * b.s)], [1, v(-side * 0.16 * b.w, 1.32 * b.s, 0.42 * b.s)], [2, v(-side * 0.24 * b.w, 0.98 * b.s, -0.02 * b.s), easeOut], [2.6, v(-side * 0.24 * b.w, 1.0 * b.s, 0)], [3, g[O]]], tau);
+  set(c, elbowOf(side), tr([[0, 0], [0.7, -0.6], [2, -1], [2.6, -0.8], [3, 0]], tau));
+  set(c, elbowOf(-side), tr([[0, 0], [1, -0.2], [2, 0.6], [3, 0]], tau));
+  // Hop (visual only).
+  const jump = c.fp ? 0.16 : 0.34;
+  set(c, 'hipY', tr([[0, g.hipY], [0.7, g.hipY - 0.3], [1, g.hipY - 0.3, lin], [c.tauA, g.hipY - 0.05, easeIn], [2, g.hipY + jump, easeOut], [2.4, g.hipY + jump * 1.05], [2.62, g.hipY - 0.16, easeIn], [3, g.hipY]], tau));
+  if (c.fp) {
+    step(c, 'lFoot', v(0, 0, 0.04), v(0, 0, 0.06), HEAVY);
+  } else {
+    // Take-off: the lead knee drives up, the other leg hangs straight down.
+    const knee = v(-side * 0.14 * b.w, 0.62 * b.s, 0.3 * b.s);
+    const hang = v(side * 0.12 * b.w, 0.3 * b.s, -0.14 * b.s);
+    const wideS = add(g[S], v(-side * 0.06, 0, 0.06));
+    const wideF = add(g[F], v(side * 0.06, 0, -0.04));
+    p[S] = path([[0, g[S]], [0.7, wideS], [1, wideS], [c.tauA, add(wideS, v(0, 0.08, 0))], [2, knee, easeOut], [2.4, knee], [2.62, v(-side * 0.18 * b.w, 0, 0.16 * b.s), easeIn], [3, g[S]]], tau);
+    p[F] = path([[0, g[F]], [0.7, wideF], [1, wideF], [c.tauA, add(wideF, v(0, 0.05, 0))], [2, hang, easeOut], [2.4, hang], [2.62, v(side * 0.2 * b.w, 0, -0.18 * b.s), easeIn], [3, g[F]]], tau);
+    set(c, kneeOf(-side), tr([[0, 0], [0.7, 0.4], [2, 0.1], [3, 0]], tau));
+    set(c, kneeOf(side), tr([[0, 0], [0.7, 0.4], [2, 0], [3, 0]], tau));
+  }
+  set(c, 'lean', tr([[0, g.lean], [0.7, 0.42], [1, 0.42, lin], [2, -0.22, easeOut], [2.4, -0.28], [2.62, 0.25], [3, g.lean]], tau));
+  set(c, 'twist', tr([[0, g.twist], [0.7, -side * 0.35], [1, -side * 0.35], [2, side * 0.55, easeOut], [2.5, side * 0.4], [3, g.twist]], tau));
+  set(c, 'hipTurn', tr([[0, 0], [0.7, -side * 0.12], [2, side * 0.3], [3, 0]], tau));
+  set(c, 'roll', tr([[0, 0], [0.7, side * 0.16], [2, -side * 0.12], [2.5, -side * 0.06], [3, 0]], tau));
+  // Eyes on the target, then up after it as it flies.
+  set(c, 'headPitch', tr([[0, g.headPitch], [0.7, g.headPitch - 0.05], [2, g.headPitch - (c.fp ? 0.2 : 0.42), easeOut], [2.45, g.headPitch - (c.fp ? 0.24 : 0.55)], [2.65, g.headPitch], [3, g.headPitch]], tau));
+  set(c, 'glow', tr([[0, 0], [0.7, 0.35], [1, 0.55], [2, 1], [2.4, 0.4], [3, 0]], tau));
+  c.stiff = tau < 1 ? 30 : tau < 2.05 ? 90 : tau < 2.55 ? 34 : 22;
+}
+
 // ===========================================================================
 // Dispatch
 
@@ -808,6 +1017,11 @@ const STYLES: Record<string, Style> = {
   dragon,
   optic,
   opticRecoil,
+  opticBank,
+  opticCalc,
+  cyclone,
+  pointBlank,
+  geneSplice,
 };
 
 /** Style of a move: its own `anim` hint, or one derived from the limb and the strike's trajectory. */

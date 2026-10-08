@@ -395,7 +395,15 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
     move: ctx.move?.id ?? null,
     rhythm,
   });
-  if (ko) sim.emit({ type: 'ko', fighter: v.id, attacker: a.id });
+  if (ko) {
+    v.burn = 0;
+    sim.emit({ type: 'ko', fighter: v.id, attacker: a.id });
+  } else if (hit.burn) {
+    // Set on fire: damage over time (see Simulation.postUpdate).
+    v.burn = Math.max(v.burn, hit.burn);
+    v.burnBy = a.id;
+    sim.emit({ type: 'ignite', fighter: v.id, by: a.id });
+  }
   return 'hit';
 }
 

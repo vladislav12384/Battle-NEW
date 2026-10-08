@@ -39,7 +39,8 @@ import {
 } from './math/vec3';
 import { armorOf, chestHeight, chestPos, inFrames, lastActiveFrame, moveReach, totalFrames } from './moves';
 import { accelerateTo, applyFriction, type WallContact } from './physics';
-import { type ProjectileHost, spawnProjectile } from './projectiles';
+import { flightRange, planShot, type ProjectileHost, spawnProjectile } from './projectiles';
+import type { RicochetPlan } from './ricochet';
 import { DT, RULES } from './rules';
 import type { FighterState } from './state';
 import type { CommandDef, HitDef, MoveDef } from './types';
@@ -290,6 +291,9 @@ function findCommand(
     if (!m || (m.meterCost ?? 0) > f.meter) continue;
     if (m.usesAirDash && air && f.airDodged) continue;
     if (filter && !filter(m)) continue;
+    // Auto-aimed shots only come out when they can actually reach someone:
+    // no path, no shot (and no meter spent), the next command gets its turn.
+    if (m.autoAim && !autoAimPlan(sim, f, m)) continue;
     return cmd;
   }
   return null;
@@ -617,6 +621,7 @@ export function respawnFighter(sim: FighterHost, f: FighterState): void {
   f.koTimer = 0;
   f.hitstop = 0;
   f.lockTarget = -1;
+  f.burn = 0;
   enterState(f, f.grounded ? 'ground' : 'air');
   sim.emit({ type: 'respawn', fighter: f.id });
 }
@@ -736,6 +741,7 @@ export function startMove(sim: FighterHost, f: FighterState, id: string, seq = 1
   f.rhythm = 0;
   f.meter -= m.meterCost ?? 0;
   if (m.usesAirDash && !f.grounded) f.airDodged = true;
+  f.autoAim = false;
   spendStamina(sim, f, m.stamina ?? RULES.staminaCost[m.kind]);
   if (m.hand) {
     f.lastHand = m.hand;
@@ -747,10 +753,69 @@ export function startMove(sim: FighterHost, f: FighterState, id: string, seq = 1
   const lunge = m.lunge ?? RULES.defaultLunge[m.kind];
   if (dir === 'back' && m.lunge === undefined) f.lungeLeft = 0;
   else f.lungeLeft = lunge + (dir === 'forward' && lunge > 0 ? RULES.lungeForwardBonus : 0);
-  f.moveTarget = pickAssistTarget(sim, f, m)?.id ?? -1;
+  // A bank shot is aimed by hand at a wall: no body aim assist pulling it toward an enemy.
+  const banked = !!m.projectiles?.some((p) => p.bounces !== undefined);
+  f.moveTarget = banked ? -1 : (pickAssistTarget(sim, f, m)?.id ?? -1);
+  const auto = m.autoAim ? autoAimPlan(sim, f, m) : null;
+  if (auto) {
+    // The visor has computed the shot: turn to where the beam has to leave.
+    f.autoAim = true;
+    f.moveTarget = auto.target.id;
+    f.autoYaw = yawFromDir(auto.plan.dir.x, auto.plan.dir.z);
+    f.autoPitch = Math.asin(clamp(auto.plan.dir.y, -1, 1));
+    f.lungeLeft = 0;
+  }
   sim.emit({ type: 'attack', fighter: f.id, move: id });
+  if (auto) sim.emit({ type: 'ricochetPlan', fighter: f.id, target: auto.target.id, points: auto.plan.points.map(clone) });
   if (m.kind === 'super') sim.emit({ type: 'super', fighter: f.id, move: id });
   applyMoveFrame(sim, f, m, f.lastInput);
+}
+
+interface AutoAim {
+  target: FighterState;
+  plan: RicochetPlan;
+}
+
+/**
+ * Plans of this tick, per simulation state (a press can be looked at several
+ * times per tick; a restored snapshot is a new state object, so it never sees
+ * a plan made for another timeline).
+ */
+const autoAimMemo = new WeakMap<object, { frame: number; plans: Map<string, AutoAim | null> }>();
+
+/**
+ * Auto-aim of a ricochet: the lock-on target first, then every enemy by how
+ * close it is to the crosshair (anywhere around, even behind), until one of
+ * them can be reached by a bounce path from the eyes.
+ */
+export function autoAimPlan(sim: FighterHost, f: FighterState, m: MoveDef): AutoAim | null {
+  const def = m.projectiles?.[0];
+  if (!m.autoAim || !def) return null;
+  let memo = autoAimMemo.get(sim.state);
+  if (!memo || memo.frame !== sim.state.frame) {
+    memo = { frame: sim.state.frame, plans: new Map() };
+    autoAimMemo.set(sim.state, memo);
+  }
+  const key = `${f.id}:${m.id}:${f.pos.x},${f.pos.y},${f.pos.z}`;
+  const known = memo.plans.get(key);
+  if (known !== undefined) return known;
+  const look = wrapAngle(f.lastInput.yaw);
+  const lock = lockedTarget(sim, f);
+  const enemies = sim.state.fighters
+    .filter((e) => e.team !== f.team && e.state !== 'ko')
+    .map((e) => ({ e, s: e === lock ? -1 : Math.abs(wrapAngle(yawTo(f.pos, e.pos) - look)) * 4 + hDistance(f.pos, e.pos) }))
+    .sort((a, b) => a.s - b.s || a.e.id - b.e.id);
+  const from = vec3(f.pos.x, f.pos.y + def.offset[1], f.pos.z);
+  let out: AutoAim | null = null;
+  for (const { e } of enemies.slice(0, 3)) {
+    const plan = planShot(sim, from, e, m.autoAim.maxBounces, flightRange(def));
+    if (plan) {
+      out = { target: e, plan };
+      break;
+    }
+  }
+  memo.plans.set(key, out);
+  return out;
 }
 
 /**
@@ -913,6 +978,12 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
  */
 function steer(sim: FighterHost, f: FighterState, m: MoveDef, input: InputFrame): void {
   if (m.fixedFacing) return;
+  if (f.autoAim) {
+    // Auto-aimed: the body turns to the computed launch direction, the camera stays free.
+    f.yaw = approachAngle(f.yaw, f.autoYaw, RULES.turnRate.super);
+    f.aimPitch = approach(f.aimPitch, f.autoPitch, RULES.turnRate.super);
+    return;
+  }
   const fr = f.moveFrame;
   const rate =
     fr <= m.startup || f.charging

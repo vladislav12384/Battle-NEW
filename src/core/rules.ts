@@ -213,6 +213,9 @@ export const RULES = {
   burstOnDamaged: 0.025,
   burst: { frames: 40, invulnEnd: 32, activeFrame: 7, radius: 3.8, knockback: 9, up: 6, hitstun: 40 },
 
+  /** Burning (fire damage over time): damage every `every` frames. Never lethal, like chip. */
+  burn: { every: 15, damage: 4 },
+
   // ---------------------------------------------------------------- stamina
   /** Stamina cost to start a move, by kind (MoveDef.stamina overrides). */
   staminaCost: { light: 9, heavy: 18, special: 14, super: 0, throw: 10 },

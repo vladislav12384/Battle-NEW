@@ -119,9 +119,13 @@ export class Hud {
   private readonly tiredEl: HTMLDivElement;
   private readonly witchEl: HTMLDivElement;
   private readonly visorEl: HTMLDivElement;
+  private readonly burnEl: HTMLDivElement;
+  private readonly ricoEl: HTMLDivElement;
+  private readonly ricoMark: HTMLDivElement;
   private readonly badgeEl: HTMLDivElement;
   private readonly revealEl: HTMLDivElement;
   private revealTimer = 0;
+  private ricoKey = '';
   private readonly lines: HTMLCanvasElement;
   private readonly numbers: HTMLDivElement;
   private impacts: { x: number; y: number; t: number; max: number; power: number; color: string; seed: number }[] = [];
@@ -145,12 +149,15 @@ export class Hud {
     this.tiredEl = el('div', 'tired', this.root);
     this.witchEl = el('div', 'witch', this.root);
     this.visorEl = el('div', 'visor', this.root);
+    this.burnEl = el('div', 'burning', this.root);
     this.flashEl = el('div', 'screenflash', this.root);
     this.numbers = el('div', 'numbers', this.root);
     this.player = new FighterPanel(this.root, 'left');
     this.target = new FighterPanel(this.root, 'right');
     el('div', 'crosshair', this.root);
     this.lockMarker = el('div', 'lock', this.root);
+    this.ricoMark = el('div', 'ricomark', this.root);
+    this.ricoEl = el('div', 'ricoready', this.root);
     this.strikeEl = el('div', 'strike', this.root);
     this.rhythmEl = el('div', 'rhythm', this.root);
     this.hintEl = el('div', 'nexthint', this.root);
@@ -171,16 +178,45 @@ export class Hud {
     this.visorEl.style.opacity = level > 0.01 ? String(Math.min(1, level)) : '0';
   }
 
-  /** The equipped card in the corner (null hides it). */
-  cardBadge(card: CardDef | null): void {
-    this.badgeEl.classList.toggle('on', !!card);
-    this.badgeEl.innerHTML = card ? cardBadgeHtml(card) : '';
+  /** On fire: flames at the edges of the view (0 = off). */
+  burning(level: number): void {
+    this.burnEl.style.opacity = level > 0.01 ? String(Math.min(1, level)) : '0';
   }
 
-  /** The card flips open in the middle of the screen, then flies into its corner. */
-  cardReveal(card: CardDef): void {
+  /**
+   * Ricochet super readiness (null hides it): a line under the crosshair and,
+   * when the visor sees a path, a reticle on the enemy it would hit.
+   */
+  ricochet(state: { ok: boolean; x: number | null; y: number | null } | null): void {
+    const key = state ? (state.ok ? 'ok' : 'no') : '';
+    if (key !== this.ricoKey) {
+      this.ricoKey = key;
+      this.ricoEl.className = `ricoready${state ? ' on' : ''}${state?.ok ? ' ok' : ''}`;
+      this.ricoEl.innerHTML = !state
+        ? ''
+        : state.ok
+          ? '<kbd>W</kbd>+<kbd>E</kbd> РИКОШЕТ ГОТОВ — визор видит цель'
+          : '<kbd>W</kbd>+<kbd>E</kbd> нет траектории — очко не потратится';
+    }
+    if (state?.ok && state.x !== null && state.y !== null) {
+      this.ricoMark.style.display = 'block';
+      this.ricoMark.style.left = `${state.x}px`;
+      this.ricoMark.style.top = `${state.y}px`;
+    } else this.ricoMark.style.display = 'none';
+  }
+
+  /** The equipped cards in the corner (empty hides them). */
+  cardBadge(cards: readonly CardDef[]): void {
+    this.badgeEl.classList.toggle('on', cards.length > 0);
+    this.badgeEl.innerHTML = cards.map((c) => `<div class="cardbadge-row">${cardBadgeHtml(c)}</div>`).join('');
+  }
+
+  /** The cards flip open in the middle of the screen, then fly into their corner. */
+  cardReveal(cards: readonly CardDef[]): void {
+    if (!cards.length) return;
     clearTimeout(this.revealTimer);
-    this.revealEl.innerHTML = `<div class="burst"></div>${cardHtml(card)}`;
+    this.revealEl.style.width = `${cards.length * 260 + (cards.length - 1) * 24}px`;
+    this.revealEl.innerHTML = `<div class="burst"></div><div class="cardreveal-row">${cards.map((c) => cardHtml(c)).join('')}</div>`;
     this.revealEl.classList.remove('on');
     void this.revealEl.offsetWidth;
     this.revealEl.classList.add('on');
@@ -207,7 +243,7 @@ export class Hud {
   }
 
   /** Floating damage number anchored to a world point (projected every frame by the game). */
-  damageNumber(world: { x: number; y: number; z: number }, amount: number, kind: 'dealt' | 'taken' | 'counter' | 'chip'): void {
+  damageNumber(world: { x: number; y: number; z: number }, amount: number, kind: 'dealt' | 'taken' | 'counter' | 'chip' | 'burn'): void {
     const d = el('div', `dmg ${kind}`, this.numbers);
     d.textContent = String(amount);
     this.floaters.push({ el: d, t: 0, world: { ...world } });
@@ -501,18 +537,44 @@ export class Hud {
       <div><kbd>V</kbd> камера: <b>${info.thirdPerson ? '3-е лицо' : '1-е лицо'}</b> · <kbd>H</kbd> приёмы</div>`;
   }
 
-  buildMoveList(c: CharacterDef, card: CardDef | null = null): void {
+  buildMoveList(c: CharacterDef, cards: readonly CardDef[] = []): void {
     const name = (id: string): string => MOVE_NAMES[id] ?? c.moves[id]?.name ?? id;
-    const cardPart = card
-      ? `<div class="mlcard" style="--c:#${card.color.toString(16).padStart(6, '0')}">
+    /** The move a command gives (cards swap them), by button, stick and position in the string. */
+    const cmd = (button: number, dir: string | undefined, seq = 1): string => {
+      const found = c.commands.find(
+        (k) =>
+          k.button === button &&
+          k.dir === dir &&
+          k.air !== true &&
+          !k.context &&
+          !k.running &&
+          !c.moves[k.move]?.meterCost &&
+          (!k.seq || (seq >= k.seq[0] && seq <= k.seq[1])),
+      );
+      return found?.move ?? '';
+    };
+    const cardOf = (move: string): boolean => cards.some((k) => k.moves.some((m) => m.id === move));
+    const mark = (move: string): string => (cardOf(move) ? ' <span class="mlc">карта</span>' : '');
+    const cardPart = cards.length
+      ? cards
+          .map(
+            (card) => `<div class="mlcard" style="--c:#${card.color.toString(16).padStart(6, '0')}">
           <h3>Карта: ${card.name} <small>${card.hero}</small></h3>
           <ul>${card.lines.map((l) => `<li>${l}</li>`).join('')}</ul>
-          <p class="hint"><kbd>C</kbd> — снять карту</p>
-        </div>`
-      : '<p class="hint"><kbd>C</kbd> — взять карту героя (Циклоп: оптический выстрел)</p>';
-    const special = card
-      ? `<kbd>E</kbd> — ${name('optic_blast').toLowerCase()} (карта), <kbd>W</kbd>+<kbd>E</kbd> — таран плечом, <kbd>S</kbd>+<kbd>E</kbd> — восходящий дракон`
-      : '<kbd>E</kbd> — волна ки, <kbd>W</kbd>+<kbd>E</kbd> — таран плечом, <kbd>S</kbd>+<kbd>E</kbd> — восходящий дракон (неуязвимый выход из-под атаки)';
+        </div>`,
+          )
+          .join('') + '<p class="hint"><kbd>C</kbd> — снять карты</p>'
+      : '<p class="hint"><kbd>C</kbd> — взять карты героя (Циклоп: оптический выстрел, рикошет)</p>';
+    const E = 4;
+    const H = 2;
+    const neutralE = cmd(E, undefined);
+    const fwdE = cmd(E, 'forward');
+    const backE = cmd(E, 'back');
+    const special = `<kbd>E</kbd> — ${name(neutralE).toLowerCase()}${mark(neutralE)}, <kbd>W</kbd>+<kbd>E</kbd> — ${name(fwdE).toLowerCase()}${mark(fwdE)}, <kbd>S</kbd>+<kbd>E</kbd> — ${name(backE).toLowerCase()} (неуязвимый выход из-под атаки)`;
+    const power = (seq: number): string => {
+      const id = cmd(H, undefined, seq);
+      return `${name(id)}${mark(id)}`;
+    };
     this.moveList.innerHTML = `
       <h2>${c.name} — как драться</h2>
       ${cardPart}
@@ -524,11 +586,11 @@ export class Hud {
       <h3>ПКМ — мощный удар-добивание</h3>
       <table>
         <tr><th>Когда</th><th>Удар</th></tr>
-        <tr><td>сразу</td><td>${name('haymaker')} — держи ПКМ, чтобы зарядить (полный заряд не блокируется)</td></tr>
-        <tr><td>после 1 удара</td><td>${name('roundhouse_r')}</td></tr>
-        <tr><td>после 2 ударов</td><td>${name('spin_backfist')} — отбрасывает в стену</td></tr>
-        <tr><td>после 3 ударов</td><td>${name('rising_uppercut')} — <kbd>Space</kbd> сразу после него = прыжок за врагом и серия в воздухе</td></tr>
-        <tr><td>после 4 ударов</td><td>${name('heel_axe')} — вбивает в землю</td></tr>
+        <tr><td>сразу</td><td>${power(1)} — держи ПКМ, чтобы зарядить (полный заряд не блокируется)</td></tr>
+        <tr><td>после 1 удара</td><td>${power(2)}</td></tr>
+        <tr><td>после 2 ударов</td><td>${power(3)} — отбрасывает в стену</td></tr>
+        <tr><td>после 3 ударов</td><td>${power(4)} — <kbd>Space</kbd> сразу после него = прыжок за врагом и серия в воздухе</td></tr>
+        <tr><td>после 4 ударов</td><td>${power(5)} — вбивает в землю</td></tr>
       </table>
       <h3>Ситуации</h3>
       <ul>
@@ -536,7 +598,7 @@ export class Hud {
         <li>Бег (держи <kbd>Shift</kbd>) + <kbd>ЛКМ</kbd> — летящее колено, + <kbd>ПКМ</kbd> — удар с разбега</li>
         <li>Враг лежит перед тобой — любая атака добивает</li>
         <li><kbd>ЛКМ</kbd> + <kbd>ПКМ</kbd> вместе — бросок (пробивает блок)</li>
-        <li>${special}. Полная шкала ки — <kbd>E</kbd> выпускает супер</li>
+        <li>${special}. Полная шкала ки — <kbd>E</kbd> выпускает супер${c.moves.ricochet_super ? ', <kbd>W</kbd>+<kbd>E</kbd> — рикошет визора (сам находит цель, поджигает)' : ''}</li>
         <li>В воздухе: <kbd>ЛКМ</kbd> — серия, <kbd>ПКМ</kbd> — удар вниз, <kbd>S</kbd>+<kbd>ПКМ</kbd> — удар ногой в пике</li>
       </ul>
       <h3>Защита</h3>

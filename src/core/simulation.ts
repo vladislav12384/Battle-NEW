@@ -152,6 +152,15 @@ export class Simulation implements FighterHost {
     }
     if (f.exhausted && f.stamina >= RULES.stamina.recoverAt) f.exhausted = false;
     if (f.state !== 'burst' && f.state !== 'ko') f.burst = Math.min(RULES.burstMax, f.burst + RULES.burstRegen);
+    // On fire: a little damage every few frames until it burns out. Never lethal, like chip.
+    if (f.burn > 0) {
+      f.burn = f.state === 'ko' ? 0 : f.burn - 1;
+      if (f.burn > 0 && f.burn % RULES.burn.every === 0 && f.health > 1) {
+        const dmg = Math.min(RULES.burn.damage, f.health - 1);
+        f.health -= dmg;
+        this.emit({ type: 'burn', fighter: f.id, damage: dmg, by: f.burnBy });
+      }
+    }
     if (f.combo.hits > 0 && !COMBO_STATES.has(f.state) && f.hitstop === 0) {
       const c = f.combo;
       this.emit({

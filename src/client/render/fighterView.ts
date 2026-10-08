@@ -55,6 +55,8 @@ export class FighterView {
   /** Glow in front of the visor (eye beams charging). */
   private readonly eyes: THREE.Sprite;
   private eyeGlow = 0;
+  /** On fire (0..1, flickering): the body smoulders orange. */
+  private burnGlow = 0;
   private readonly fists: THREE.Mesh[] = [];
   private readonly wraps: THREE.Mesh[] = [];
   private readonly feet: THREE.Mesh[] = [];
@@ -194,6 +196,16 @@ export class FighterView {
     this.eyeGlow = glow;
   }
 
+  /** Color of the energy aura (strikes wrapped in a hero's energy glow in its color). */
+  setAura(color: number): void {
+    (this.aura.material as THREE.MeshBasicMaterial).color.set(color);
+  }
+
+  /** Burning: an orange smoulder over the whole body (0 = none). */
+  setBurn(level: number): void {
+    this.burnGlow = level;
+  }
+
   /** Brief flash when hit (stronger for heavy blows, red on counter hits). */
   hitFlash(strength = 1, color = 0xffd9b3): void {
     this.flashT = 1;
@@ -295,8 +307,9 @@ export class FighterView {
     const g = pose.glow;
     const fl = this.flashT * 0.28 * this.flashK;
     const fc = this.flashColor;
-    for (const m of this.mats) m.emissive.setRGB(fl * fc.r, fl * fc.g, fl * fc.b);
-    this.skin.emissive.setRGB(g * 0.6 + fl * fc.r, g * 0.45 + fl * fc.g, g * 0.15 + fl * fc.b);
+    const bg = this.burnGlow;
+    for (const m of this.mats) m.emissive.setRGB(fl * fc.r + bg * 0.55, fl * fc.g + bg * 0.16, fl * fc.b);
+    this.skin.emissive.setRGB(g * 0.6 + fl * fc.r + bg * 0.6, g * 0.45 + fl * fc.g + bg * 0.2, g * 0.15 + fl * fc.b);
     const aMat = this.aura.material as THREE.MeshBasicMaterial;
     aMat.opacity = firstPerson ? 0 : g * 0.18;
     toThree(j.chest, this.aura.position).add(toThree(j.hip, this.tmpA)).multiplyScalar(0.5);

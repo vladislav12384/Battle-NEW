@@ -74,6 +74,9 @@ export function createFighterState(
     stringPos: 0,
     exposed: 0,
     lungeLeft: 0,
+    autoAim: false,
+    autoYaw: 0,
+    autoPitch: 0,
     hitstop: 0,
     shake: 0,
     health: stats.maxHealth,
@@ -84,6 +87,8 @@ export function createFighterState(
     exhausted: false,
     slowAccum: 0,
     guardBroken: false,
+    burn: 0,
+    burnBy: -1,
     parryWindow: 0,
     parryCooldown: 0,
     dodgeAir: false,
@@ -135,6 +140,7 @@ export function enterState(f: FighterState, s: StateId, stun = 0): void {
     f.onBeat = false;
     f.rhythm = 0;
     f.stringPos = 0;
+    f.autoAim = false;
   }
   if (s !== 'ground') f.running = false;
 }

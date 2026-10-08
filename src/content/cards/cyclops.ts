@@ -1,5 +1,7 @@
 /**
- * Cyclops' cards. The starter card: Optic Blast.
+ * Cyclops' cards. They form a set: each can be played alone or together.
+ *
+ * Optic Blast (the starter):
  *
  *   E               a beam from the visor: near-instant, goes exactly where you
  *                   look (also in the air). Parry sends it back.
@@ -7,10 +9,23 @@
  *                   5-6 m back. Hurts nobody, it opens distance.
  *   E in that flight  fire straight out of the recoil (momentum carries on).
  *   back + DODGE in the air  one more recoil per jump (uses the air dash).
+ *
+ * Ricochet:
+ *   forward + E     instead of the shoulder rush: a beam that bounces off walls,
+ *                   pillars and the floor (3 times), harder with every bounce.
+ *                   You aim it yourself; at each bounce it bends a little
+ *                   toward an enemy close to its path.
+ *   forward + E with a super point (100 ki)  the visor computes the shot: a
+ *                   path to the enemy wherever it stands, however many bounces
+ *                   it takes. The hit sets it on fire. No path: the point is
+ *                   kept and the plain ricochet comes out instead.
+ *   RMB string      Cyclone (2nd), Point-Blank Optic (3rd), Gene Splice (4th).
  */
 import { Button } from '../../core/input';
 import { DEG } from '../../core/math/vec3';
 import type { HitDef, MoveDef } from '../../core/types';
+import { STRIKER_TEMPO } from '../characters/striker';
+import { sweep, tempo } from '../dsl';
 import type { CardDef } from '.';
 
 const { SPECIAL: E, DODGE } = Button;
@@ -106,5 +121,204 @@ export const opticBlast: CardDef = {
   commands: [
     { move: 'optic_recoil', button: DODGE, dir: 'back', air: false },
     { move: 'optic_recoil_air', button: DODGE, dir: 'back', air: true },
+  ],
+};
+
+// ===========================================================================
+// Ricochet
+
+/** Forward + E: a bank shot. Aim it yourself, the bounce helps a little. */
+const ricochetMove: MoveDef = {
+  id: 'ricochet',
+  name: 'Ricochet',
+  kind: 'special',
+  anim: 'opticBank',
+  vfx: 'ricochet',
+  startup: 17,
+  active: 4,
+  recovery: 24,
+  stamina: 16,
+  lunge: 0,
+  mobility: 0.15,
+  turnRate: 7 * DEG,
+  gravityScale: 0.3,
+  hitboxes: [],
+  projectiles: [
+    {
+      frame: 18,
+      offset: [0, 1.6, 0.3],
+      speed: 46,
+      radius: 0.2,
+      lifetime: 50,
+      bounces: 3,
+      bounceAssist: { cone: 30, turn: 14 },
+      bounceDamage: 0.3,
+      hit: {
+        damage: 40,
+        hitstun: 26,
+        blockstun: 16,
+        hitstop: 9,
+        guardDamage: 20,
+        knockback: { fwd: 5, up: 0 },
+        airKnockback: { fwd: 3.5, up: 5 },
+        effect: 'energy',
+      },
+    },
+  ],
+};
+
+/** Forward + E with a super point: the visor computes the bank shot and the beam sets the target on fire. */
+const ricochetSuper: MoveDef = {
+  id: 'ricochet_super',
+  name: 'Calculated Ricochet (super)',
+  kind: 'super',
+  meterCost: 100,
+  anim: 'opticCalc',
+  vfx: 'ricochetSuper',
+  autoAim: { maxBounces: 8 },
+  // Leaves from the eyes exactly where the visor computed the shot from.
+  pitchAim: false,
+  startup: 22,
+  active: 4,
+  recovery: 26,
+  lunge: 0,
+  mobility: 0,
+  gravityScale: 0.2,
+  hitboxes: [],
+  projectiles: [
+    {
+      frame: 23,
+      offset: [0, 1.6, 0],
+      speed: 52,
+      radius: 0.24,
+      lifetime: 80,
+      bounces: 8,
+      guided: true,
+      hit: {
+        damage: 95,
+        hitstun: 40,
+        blockstun: 20,
+        hitstop: 16,
+        guardDamage: 40,
+        knockback: { fwd: 7, up: 6 },
+        launch: true,
+        wallSplat: true,
+        parryable: false,
+        effect: 'energy',
+        minScaling: 0.5,
+        burn: 180,
+      },
+    },
+  ],
+};
+
+// ---------------------------------------------------------------- the power string (RMB)
+// Authored at the Striker's base speed and re-timed with the same tempo, so
+// they slot into the strings exactly where the moves they replace were.
+
+/** 2nd in the string, instead of the roundhouse: a jumping, spinning hook kick. */
+const cycloneKick: MoveDef = {
+  id: 'cyclone_kick',
+  anim: 'cyclone',
+  vfx: 'cyclone',
+  name: 'Cyclone Kick',
+  kind: 'heavy',
+  stamina: 18,
+  family: 'cyclone',
+  startup: 11,
+  active: 3,
+  recovery: 21,
+  hitboxes: [
+    sweep([12, 14], [0.85, 1.45, 0.0], [-0.45, 1.5, 1.0], 0.3, {
+      damage: 64,
+      hitstun: 27,
+      blockstun: 15,
+      hitstop: 12,
+      guardDamage: 30,
+      knockback: { fwd: 8.5, up: 3.5, side: -2 },
+      wallSplat: true,
+      effect: 'heavy',
+    }, { limb: 'rFoot' }),
+  ],
+};
+
+/** 3rd in the string, instead of the backfist: step in, palm to the visor, a blast in the face. */
+const pointBlank: MoveDef = {
+  id: 'point_blank',
+  anim: 'pointBlank',
+  vfx: 'opticPoint',
+  name: 'Point-Blank Optic',
+  kind: 'heavy',
+  stamina: 20,
+  family: 'optic',
+  startup: 12,
+  active: 3,
+  recovery: 25,
+  motion: [{ frames: [16, 22], fwd: -3 }],
+  hitboxes: [
+    sweep([13, 15], [0, 1.62, 0.25], [0, 1.55, 1.5], 0.38, {
+      damage: 74,
+      hitstun: 30,
+      blockstun: 16,
+      hitstop: 13,
+      guardDamage: 34,
+      knockback: { fwd: 9, up: 4.5 },
+      wallBounce: true,
+      effect: 'energy',
+    }, { limb: 'head' }),
+  ],
+};
+
+/** 4th in the string, instead of the rising uppercut: a jumping uppercut wrapped in ruby energy. */
+const geneSplice: MoveDef = {
+  id: 'gene_splice',
+  anim: 'geneSplice',
+  vfx: 'geneSplice',
+  name: 'Gene Splice (launcher)',
+  kind: 'heavy',
+  stamina: 16,
+  hand: 'right',
+  family: 'launcher',
+  startup: 9,
+  active: 3,
+  recovery: 22,
+  hitboxes: [
+    sweep([10, 12], [0.1, 0.8, 0.55], [0.05, 2.1, 0.5], 0.27, {
+      damage: 60,
+      hitstun: 36,
+      blockstun: 15,
+      hitstop: 11,
+      knockback: { fwd: 1, up: 13 },
+      launch: true,
+      juggleCost: 2,
+      effect: 'launch',
+    }, { limb: 'rHand' }),
+  ],
+  jumpCancel: { frames: [13, 30], on: 'hit', high: true },
+};
+
+export const ricochet: CardDef = {
+  id: 'ricochet',
+  name: 'Рикошет',
+  hero: 'Циклоп',
+  rarity: 'rare',
+  color: 0xffb21e,
+  lines: [
+    '<kbd>W</kbd>+<kbd>E</kbd> — рикошет вместо тарана: до 3 отскоков, каждый +30% урона. Целишься сам, на отскоке луч чуть доворачивает к врагу',
+    'С очком супера визор сам ведёт луч к врагу, где бы он ни был, и <b>поджигает</b>. Нет пути — очко не тратится',
+    '<kbd>ПКМ</kbd> в серии: «Циклон», «Выстрел в упор», «Генный сплайс»',
+  ],
+  hint: '<kbd>W</kbd>+<kbd>E</kbd> рикошет · с очком супера — сам наводится',
+  flavor: 'Угол падения равен углу отражения.',
+  moves: [ricochetMove, ricochetSuper, ...[cycloneKick, pointBlank, geneSplice].map((m) => tempo(m, STRIKER_TEMPO))],
+  swap: {
+    shoulder_rush: 'ricochet',
+    roundhouse_r: 'cyclone_kick',
+    spin_backfist: 'point_blank',
+    rising_uppercut: 'gene_splice',
+  },
+  commands: [
+    { move: 'ricochet_super', button: E, dir: 'forward' },
+    { move: 'ricochet', button: E, dir: 'forward' },
   ],
 };

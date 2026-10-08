@@ -22,28 +22,28 @@ function saveLevel(level: BotLevel): void {
   }
 }
 
-const CARD_KEY = 'battle.card';
-/** The remembered card: an id, 'none', or null when never chosen. */
-function savedCard(): string | null {
+const CARDS_KEY = 'battle.cards';
+/** The remembered cards: ids separated by commas, 'none', or null when never chosen. */
+function savedCards(): string | null {
   try {
-    return localStorage.getItem(CARD_KEY);
+    return localStorage.getItem(CARDS_KEY);
   } catch {
     return null;
   }
 }
-function saveCard(card: string | null): void {
+function saveCards(cards: string[]): void {
   try {
-    localStorage.setItem(CARD_KEY, card ?? 'none');
+    localStorage.setItem(CARDS_KEY, cards.length ? cards.join(',') : 'none');
   } catch {
     // storage unavailable: the choice just isn't remembered
   }
 }
-/** ?card=<id> / ?card=none, else the remembered choice; the first card is on by default. */
-function initialCard(param: string | null): string | null {
-  const pick = param ?? savedCard();
-  if (pick === 'none') return null;
-  if (pick && CARDS[pick]) return pick;
-  return Object.keys(CARDS)[0] ?? null;
+/** ?card=<id>,<id> / ?card=none, else the remembered choice; every card is on by default. */
+function initialCards(param: string | null): string[] {
+  const pick = param ?? savedCards();
+  if (pick === 'none') return [];
+  const ids = (pick ?? '').split(',').filter((c) => CARDS[c]);
+  return ids.length ? ids : Object.keys(CARDS);
 }
 
 const params = new URLSearchParams(location.search);
@@ -61,7 +61,7 @@ const game = new Game(canvas, ui, {
   dummyMode: (params.get('dummy') as BotMode | null) ?? undefined,
   demoMode: (params.get('demo') as BotMode | null) || undefined,
   level: (isLevel(params.get('level')) ? (params.get('level') as BotLevel) : null) ?? savedLevel() ?? 'normal',
-  card: initialCard(params.get('card')),
+  cards: initialCards(params.get('card')),
 });
 (window as unknown as { game: Game }).game = game;
 
@@ -84,24 +84,28 @@ game.onLevelChange = (level) => {
   showLevel(level);
 };
 
-// The hero card on the start screen: click the card or the button to take it / put it back.
-const firstCard = Object.values(CARDS)[0];
+// Hero cards on the start screen: click a card to take it / put it back, the button takes or drops them all.
+const allCards = Object.keys(CARDS);
 const startCard = document.getElementById('startcard') as HTMLElement;
 const cardToggle = document.getElementById('cardtoggle') as HTMLButtonElement;
-(document.getElementById('cardslot') as HTMLElement).innerHTML = firstCard ? cardHtml(firstCard) : '';
-function showStartCard(card: string | null): void {
-  startCard.classList.toggle('off', !card);
-  cardToggle.textContent = card ? '✓ Карта в бою — убрать' : 'Взять карту в бой';
+const cardSlot = document.getElementById('cardslot') as HTMLElement;
+cardSlot.innerHTML = Object.values(CARDS)
+  .map((c) => cardHtml(c))
+  .join('');
+function showStartCards(cards: string[]): void {
+  startCard.classList.toggle('off', cards.length === 0);
+  for (const el of Array.from(cardSlot.querySelectorAll<HTMLElement>('.tcard'))) el.classList.toggle('off', !cards.includes(el.dataset.card ?? ''));
+  cardToggle.textContent =
+    cards.length === allCards.length ? '✓ Все карты в бою — убрать' : cards.length ? `✓ В бою: ${cards.length} из ${allCards.length} — взять все` : 'Взять карты в бой';
 }
-function toggleCard(): void {
-  game.equipCard(game.settings.card ? null : (firstCard?.id ?? null), false);
+cardToggle.addEventListener('click', () => game.equipCards(game.settings.cards.length === allCards.length ? [] : allCards, false));
+for (const el of Array.from(cardSlot.querySelectorAll<HTMLElement>('.tcard'))) {
+  el.addEventListener('click', () => game.toggleCard(el.dataset.card ?? '', false));
 }
-cardToggle.addEventListener('click', toggleCard);
-startCard.querySelector('.tcard')?.addEventListener('click', toggleCard);
-showStartCard(game.settings.card);
-game.onCardChange = (card) => {
-  saveCard(card);
-  showStartCard(card);
+showStartCards(game.settings.cards);
+game.onCardChange = (cards) => {
+  saveCards(cards);
+  showStartCards(cards);
 };
 
 function begin(): void {

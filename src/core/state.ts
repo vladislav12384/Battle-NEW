@@ -112,6 +112,10 @@ export interface FighterState {
   /** Left exposed by a perfect dodge: acts at half speed while > 0. */
   exposed: number;
   lungeLeft: number;
+  /** Auto-aimed move (ricochet super): the body turns to this launch direction. */
+  autoAim: boolean;
+  autoYaw: number;
+  autoPitch: number;
 
   /** Freeze frames remaining (hit stop). */
   hitstop: number;
@@ -130,6 +134,9 @@ export interface FighterState {
   slowAccum: number;
   /** Guard was broken: stamina is partly restored when the stagger ends. */
   guardBroken: boolean;
+  /** On fire: frames left (damage over time) and who lit it. */
+  burn: number;
+  burnBy: number;
 
   parryWindow: number;
   parryCooldown: number;
@@ -193,6 +200,12 @@ export interface ProjectileState {
   hitsLeft: number;
   registry: number[];
   reflected: boolean;
+  /** Ricochets: bounces made so far, and the bounce points of this tick's flight (prevPos -> path... -> pos). */
+  bounces: number;
+  path: Vec3[];
+  /** Guided ricochets: the fighter it hunts (-1 = none) and the bounces left in its plan. */
+  target: number;
+  planLeft: number;
 }
 
 export interface SimState {
@@ -261,6 +274,11 @@ export type GameEvent =
   | { type: 'respawn'; fighter: number }
   | { type: 'projectile'; id: number; owner: number }
   | { type: 'projectileEnd'; id: number; point: Vec3 }
-  | { type: 'reflect'; id: number; fighter: number };
+  | { type: 'reflect'; id: number; fighter: number }
+  | { type: 'bounce'; id: number; point: Vec3; normal: Vec3; count: number }
+  /** An auto-aimed shot was computed: the path the beam will take (eyes, bounces..., target). */
+  | { type: 'ricochetPlan'; fighter: number; target: number; points: Vec3[] }
+  | { type: 'ignite'; fighter: number; by: number }
+  | { type: 'burn'; fighter: number; damage: number; by: number }
 
 export type GameEventType = GameEvent['type'];

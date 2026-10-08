@@ -52,6 +52,11 @@ export const MOVE_NAMES: Record<string, string> = {
   optic_blast: 'Оптический выстрел',
   optic_recoil: 'Отлёт',
   optic_recoil_air: 'Отлёт в воздухе',
+  ricochet: 'Рикошет',
+  ricochet_super: 'Рикошет визора',
+  cyclone_kick: 'Циклон',
+  point_blank: 'Выстрел в упор',
+  gene_splice: 'Генный сплайс',
 };
 
 export const moveName = (id: string | null | undefined, fallback = ''): string =>
@@ -134,7 +139,7 @@ export interface Lesson {
   count(e: GameEvent, ctx: LessonCtx): number;
 }
 
-const FINISHERS = new Set(['roundhouse_r', 'spin_backfist', 'rising_uppercut', 'heel_axe']);
+const FINISHERS = new Set(['roundhouse_r', 'spin_backfist', 'rising_uppercut', 'heel_axe', 'cyclone_kick', 'point_blank', 'gene_splice']);
 
 export const LESSONS: Lesson[] = [
   {

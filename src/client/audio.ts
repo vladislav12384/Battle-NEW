@@ -30,7 +30,15 @@ export type Sfx =
   | 'optic'
   | 'opticFloor'
   | 'sizzle'
-  | 'card';
+  | 'card'
+  | 'ricochet'
+  | 'calc'
+  | 'opticSuper'
+  | 'ignite'
+  | 'burn'
+  | 'pointBlank'
+  | 'geneSplice'
+  | 'cyclone';
 
 export class Audio {
   private ctx: AudioContext | null = null;
@@ -241,6 +249,60 @@ export class Audio {
         // A scorched surface hissing.
         this.hiss('highpass', 4200, 0.7, 0.16 * k, 0.4, 2400);
         this.tone('triangle', 700, 300, 0.05 * k, 0.12);
+        break;
+      case 'ricochet': {
+        // A beam glancing off stone: a bright zing that drops away, a crack under it.
+        // Intensity above 1 raises the pitch (later bounces sing higher).
+        const up = Math.max(1, intensity);
+        this.tone('sine', 3400 * up, 900 * up, 0.12, 0.22);
+        this.tone('triangle', 1900 * up, 600, 0.07, 0.18, 0.01);
+        this.hiss('bandpass', 5200, 2.2, 0.16, 0.08, 2600);
+        this.tone('sine', 160, 60, 0.3, 0.12);
+        break;
+      }
+      case 'calc':
+        // The visor computes the shot: a quick run of targeting beeps, a lock tone.
+        for (let i = 0; i < 5; i++) this.tone('square', 1800 + i * 260, 1800 + i * 260, 0.035, 0.035, i * 0.045);
+        this.tone('sine', 2600, 2600, 0.07, 0.16, 0.25);
+        this.tone('sine', 3900, 3900, 0.04, 0.14, 0.27);
+        break;
+      case 'opticSuper':
+        // Full-power beam: the zap with a roar of fire behind it.
+        this.tone('sawtooth', 2600, 180, 0.2 * k, 0.32);
+        this.tone('square', 1200, 90, 0.1 * k, 0.28);
+        this.tone('sine', 120, 35, 0.8 * k, 0.5);
+        this.hiss('highpass', 3000, 0.5, 0.3 * k, 0.2, 9000);
+        this.hiss('lowpass', 1800, 0.6, 0.35 * k, 0.6, 300);
+        break;
+      case 'ignite':
+        // Fire catches: a breathy whoomp and crackle.
+        this.hiss('lowpass', 900, 0.6, 0.55 * k, 0.45, 2600);
+        this.tone('sine', 90, 50, 0.4 * k, 0.3);
+        this.hiss('bandpass', 3800, 3, 0.14 * k, 0.3, 1800);
+        break;
+      case 'burn':
+        // Crackling flames.
+        this.hiss('bandpass', 2600 + Math.random() * 2000, 4, 0.1 * k, 0.05);
+        this.hiss('bandpass', 1200 + Math.random() * 900, 3, 0.07 * k, 0.07);
+        break;
+      case 'pointBlank':
+        // A beam fired into a face: a fat zap and a deep blast.
+        this.tone('sawtooth', 1500, 120, 0.2 * k, 0.24);
+        this.tone('sine', 75, 28, 0.95 * k, 0.5);
+        this.hiss('lowpass', 4200, 0.5, 0.55 * k, 0.35, 220);
+        this.hiss('highpass', 5000, 0.6, 0.2 * k, 0.1);
+        break;
+      case 'geneSplice':
+        // Rising uppercut wrapped in energy: an upward whoosh and shimmer.
+        this.hiss('bandpass', 500, 1, 0.22 * k, 0.32, 3600);
+        this.tone('sawtooth', 220, 1300, 0.08 * k, 0.28);
+        this.tone('sine', 880, 2600, 0.06 * k, 0.3, 0.05);
+        break;
+      case 'cyclone':
+        // A whirl: two fast passes of air.
+        this.hiss('bandpass', 600, 1.4, 0.15 * k, 0.16, 2400);
+        this.hiss('bandpass', 900, 1.4, 0.18 * k, 0.18, 3000);
+        this.tone('sine', 160, 90, 0.08 * k, 0.3);
         break;
     }
   }

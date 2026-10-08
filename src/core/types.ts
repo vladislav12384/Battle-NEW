@@ -90,6 +90,8 @@ export interface HitDef {
   effect?: HitEffect;
   /** Lower bound for combo damage scaling on this hit (supers keep more damage). */
   minScaling?: number;
+  /** Sets the victim on fire for this many frames (damage over time, see RULES.burn). */
+  burn?: number;
 }
 
 export interface HitboxDef {
@@ -131,6 +133,24 @@ export interface ProjectileDef {
   pitchOffset?: number;
   /** How many victims it can hit before disappearing (default 1). */
   maxHits?: number;
+  /**
+   * Ricochet: bounces off walls, pillars and the floor this many times
+   * (angle in = angle out) instead of breaking on them.
+   */
+  bounces?: number;
+  /**
+   * Partial aim help at each bounce: if an enemy lies within `cone` degrees
+   * of the reflected path (in plain sight), the shot turns toward it by at
+   * most `turn` degrees.
+   */
+  bounceAssist?: { cone: number; turn: number };
+  /** Extra damage per bounce already made (0.25 = +25% per bounce). */
+  bounceDamage?: number;
+  /**
+   * Guided ricochet: fired along a path computed to reach the move's target
+   * (see core/ricochet), re-planned at every bounce, homing on the last leg.
+   */
+  guided?: boolean;
   hit: HitDef;
 }
 
@@ -234,6 +254,12 @@ export interface MoveDef {
    * motion goes where the move was aimed while the camera stays free.
    */
   fixedFacing?: boolean;
+  /**
+   * Auto-aimed ricochet: the move only starts if a bounce path to an enemy
+   * exists (wherever it stands); the body turns to the launch direction and
+   * its guided projectile follows that path. No path: the command is skipped.
+   */
+  autoAim?: { maxBounces: number };
   cancels?: CancelDef[];
   jumpCancel?: { frames: [number, number]; on: 'hit' | 'contact'; high?: boolean };
   meterCost?: number;

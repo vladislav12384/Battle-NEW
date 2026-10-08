@@ -16,7 +16,20 @@ const ART: Record<string, string> = {
       <div class="tc-visor"><i></i></div>
     </div>
     <div class="tc-beam"></div>`,
+  ricochet: `
+    <div class="tc-wall top"></div>
+    <div class="tc-wall bottom"></div>
+    <div class="tc-visor2"><i></i></div>
+    <div class="tc-target"></div>
+    <div class="tc-flame"></div>
+    <div class="tc-leg l1"></div>
+    <div class="tc-leg l2"></div>
+    <div class="tc-leg l3"></div>
+    <div class="tc-spark s1"></div>
+    <div class="tc-spark s2"></div>`,
 };
+/** Extra class of the art frame by card id (its own background). */
+const ART_CLASS: Record<string, string> = { ricochet: 'rico' };
 
 /** Inline style carrying the card's colors. */
 export const cardStyle = (card: CardDef): string =>
@@ -30,7 +43,7 @@ export function cardHtml(card: CardDef): string {
       <div class="tc-in">
         <div class="tc-face">
           <div class="tc-top"><span class="tc-hero">${card.hero}</span><span class="tc-rar">${RARITY[card.rarity]}</span></div>
-          <div class="tc-art">${art}</div>
+          <div class="tc-art ${ART_CLASS[card.id] ?? ''}">${art}</div>
           <div class="tc-name">${card.name}</div>
           <ul class="tc-lines">${card.lines.map((l) => `<li>${l}</li>`).join('')}</ul>
           ${card.flavor ? `<div class="tc-flavor">${card.flavor}</div>` : ''}
@@ -44,9 +57,9 @@ export function cardHtml(card: CardDef): string {
 /** Compact strip for the HUD: which card is on and its keys. */
 export function cardBadgeHtml(card: CardDef): string {
   return `
-    <div class="tc-mini" style="${cardStyle(card)}"><i></i></div>
+    <div class="tc-mini ${card.id}" style="${cardStyle(card)}"><i></i></div>
     <div class="tc-badge-text">
-      <b>${card.name}</b><span>${card.hero} · <kbd>C</kbd> снять</span>
+      <b>${card.name}</b><span>${card.hero} · <kbd>C</kbd> снять карты</span>
       <span class="keys">${card.hint}</span>
     </div>`;
 }

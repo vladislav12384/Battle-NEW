@@ -567,13 +567,16 @@ function airFeet(p: Pose, f: FighterState, b: Body, move: MoveDef, feetUsed: boo
   }
 }
 
+/** Styles that place the feet themselves (corkscrew, recoil flight, jumps). */
+const FEET_STYLES = new Set(['dragon', 'opticRecoil', 'cyclone', 'geneSplice', 'opticBank', 'opticCalc']);
+
 /** Strike poses: choreographed styles (strikes.ts), else limbs follow the hitboxes. */
 function attackPose(p: Pose, f: FighterState, stats: CharacterStats, b: Body, move: MoveDef, fr: number, firstPerson: boolean, time: number): void {
   const frame = f.charging ? f.moveFrame : f.moveFrame + fr;
   if (strikePose(p, f, stats, b, move, frame, strikeLine(move), firstPerson, time)) {
     const feetUsed = move.hitboxes.some((h) => h.limb === 'lFoot' || h.limb === 'rFoot');
     // These styles place the feet themselves (corkscrew, recoil flight).
-    if (move.anim !== 'dragon' && move.anim !== 'opticRecoil') airFeet(p, f, b, move, feetUsed);
+    if (!FEET_STYLES.has(move.anim ?? '')) airFeet(p, f, b, move, feetUsed);
     if (move.kind === 'super') p.glow = Math.max(p.glow, 0.8);
     return;
   }

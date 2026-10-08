@@ -7,7 +7,7 @@
  * simulation needs no notion of cards at all.
  */
 import type { CharacterDef, CommandDef, MoveDef } from '../../core/types';
-import { opticBlast } from './cyclops';
+import { opticBlast, ricochet } from './cyclops';
 
 export type CardRarity = 'common' | 'rare' | 'legendary';
 
@@ -32,12 +32,17 @@ export interface CardDef {
   commands?: CommandDef[];
 }
 
+/** Every card, in a fixed order (character ids list cards in this order). */
 export const CARDS: Readonly<Record<string, CardDef>> = {
   [opticBlast.id]: opticBlast,
+  [ricochet.id]: ricochet,
 };
 
-/** Id of a character carrying cards: "striker+optic_blast". */
-export const cardCharId = (base: string, cards: readonly string[]): string => [base, ...cards].join('+');
+/** Card ids in the canonical order of CARDS. */
+export const sortCards = (ids: readonly string[]): string[] => Object.keys(CARDS).filter((id) => ids.includes(id));
+
+/** Id of a character carrying cards: "striker+optic_blast" (cards in the order of CARDS). */
+export const cardCharId = (base: string, cards: readonly string[]): string => [base, ...sortCards(cards)].join('+');
 
 /** `base` with the cards plugged in. */
 export function withCards(base: CharacterDef, cards: readonly CardDef[]): CharacterDef {
@@ -61,14 +66,15 @@ export function withCards(base: CharacterDef, cards: readonly CardDef[]): Charac
   };
 }
 
-/** Every single-card version of `base`, keyed by character id (to register with a Simulation). */
+/** Every version of `base` with any combination of cards, keyed by character id (to register with a Simulation). */
 export function cardCharacters(base: CharacterDef): Record<string, CharacterDef> {
   const out: Record<string, CharacterDef> = {};
-  for (const card of Object.values(CARDS)) {
-    const c = withCards(base, [card]);
+  const all = Object.values(CARDS);
+  for (let mask = 1; mask < 1 << all.length; mask++) {
+    const c = withCards(base, all.filter((_, i) => mask & (1 << i)));
     out[c.id] = c;
   }
   return out;
 }
 
-export { opticBlast };
+export { opticBlast, ricochet };

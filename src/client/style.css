@@ -1232,3 +1232,341 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------------------------------------------------------------- Ricochet card */
+.dmg.burn {
+  color: #fdba74;
+  font-size: 14px;
+  text-shadow: 0 0 8px rgba(255, 120, 30, 0.9), 0 2px 5px rgba(0, 0, 0, 0.9);
+}
+
+/* On fire: flames licking up the edges of the view. */
+.burning {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 55% at 50% 112%, rgba(255, 120, 20, 0.75), rgba(255, 60, 10, 0.25) 45%, transparent 70%),
+    radial-gradient(ellipse at center, transparent 50%, rgba(255, 90, 20, 0.42) 100%);
+  mix-blend-mode: screen;
+  animation: burnflicker 0.23s steps(2) infinite;
+}
+@keyframes burnflicker {
+  50% {
+    filter: brightness(1.25) hue-rotate(-8deg);
+  }
+}
+
+/* Ricochet super: is there a path? A line under the crosshair... */
+.ricoready {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 74px);
+  transform: translateX(-50%);
+  display: none;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: rgba(20, 12, 8, 0.55);
+  border: 1px solid rgba(255, 178, 30, 0.25);
+  color: #a8a29e;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ricoready.on {
+  display: block;
+}
+.ricoready.ok {
+  color: #ffd27a;
+  border-color: rgba(255, 178, 30, 0.7);
+  box-shadow: 0 0 14px rgba(255, 140, 30, 0.45);
+  text-shadow: 0 0 8px rgba(255, 150, 40, 0.8);
+  animation: ricopulse 1.1s ease-in-out infinite;
+}
+@keyframes ricopulse {
+  50% {
+    box-shadow: 0 0 22px rgba(255, 140, 30, 0.8);
+  }
+}
+/* ...and a reticle on whoever the visor would hit. */
+.ricomark {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  display: none;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 178, 30, 0.85);
+  box-shadow: 0 0 12px rgba(255, 120, 30, 0.8), inset 0 0 8px rgba(255, 120, 30, 0.5);
+  animation: ricomark 1.4s linear infinite;
+}
+.ricomark::before,
+.ricomark::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -8px;
+  bottom: -8px;
+  width: 2px;
+  margin-left: -1px;
+  background: linear-gradient(180deg, #ffb21e 0 9px, transparent 9px calc(100% - 9px), #ffb21e calc(100% - 9px));
+}
+.ricomark::after {
+  transform: rotate(90deg);
+}
+@keyframes ricomark {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Several cards: reveal side by side, badges stacked. */
+.cardreveal-row {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 24px;
+}
+.cardreveal-row .tcard:nth-child(2) .tc-in {
+  animation-delay: 0.18s;
+}
+.cardbadge {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.cardbadge-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.movelist .mlc {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 178, 30, 0.18);
+  color: #ffd27a;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+#cardslot {
+  display: flex;
+  gap: 12px;
+}
+#cardslot .tcard {
+  zoom: 0.84;
+}
+#cardslot .tcard.off {
+  filter: grayscale(0.9) brightness(0.62);
+}
+@media (min-width: 1081px) {
+  .startgrid {
+    grid-template-columns: 1fr auto;
+  }
+}
+
+/* Mini card in the corner badge: the ricochet zigzags. */
+.tc-mini.ricochet i {
+  left: 6px;
+  right: 6px;
+  top: 12px;
+  height: 20px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  border-top: 3px solid #ff3b30;
+  clip-path: polygon(0 0, 50% 100%, 100% 0, 100% 15%, 50% 115%, 0 15%);
+  background: linear-gradient(90deg, #ff3b30, #ffd6c8, #ff3b30);
+  filter: drop-shadow(0 0 4px #ff3b30);
+}
+
+/* Art: the ricochet — a beam banks off two walls into its target, which catches fire. */
+.tc-art.rico {
+  background:
+    radial-gradient(circle at 76% 70%, rgba(255, 150, 40, 0.28), transparent 45%),
+    linear-gradient(180deg, #141019, #07070b);
+}
+.tc-wall {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 9px;
+  background: repeating-linear-gradient(90deg, #3a3f52 0 18px, #2b2f3e 18px 20px);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+.tc-wall.top {
+  top: 0;
+}
+.tc-wall.bottom {
+  bottom: 0;
+}
+.tc-visor2 {
+  position: absolute;
+  left: 10px;
+  top: 52px;
+  width: 30px;
+  height: 11px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #cfa64a, #5b4515);
+}
+.tc-visor2 i {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 3px;
+  height: 5px;
+  border-radius: 3px;
+  background: #ffd8cc;
+  box-shadow: 0 0 8px #ff3b30, 0 0 18px #ff2a10;
+}
+.tc-leg {
+  position: absolute;
+  height: 5px;
+  border-radius: 3px;
+  transform-origin: left center;
+  background: linear-gradient(90deg, #ffe7de, #ff3b30);
+  box-shadow: 0 0 9px #ff3b30, 0 0 22px rgba(255, 40, 16, 0.75);
+  animation: tcleg 2.4s ease-out infinite;
+  opacity: 0;
+}
+.tc-leg.l1 {
+  left: 38px;
+  top: 57px;
+  width: 58px;
+  transform: rotate(-44deg);
+}
+.tc-leg.l2 {
+  left: 80px;
+  top: 12px;
+  width: 128px;
+  transform: rotate(46deg);
+  animation-delay: 0.16s;
+}
+.tc-leg.l3 {
+  left: 168px;
+  top: 106px;
+  width: 50px;
+  transform: rotate(-40deg);
+  animation-delay: 0.34s;
+}
+.tc-spark {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff, #ffb21e 40%, transparent 70%);
+  animation: tcspark 2.4s ease-out infinite;
+  opacity: 0;
+}
+.tc-spark.s1 {
+  left: 82px;
+  top: 12px;
+  animation-delay: 0.14s;
+}
+.tc-spark.s2 {
+  left: 170px;
+  top: 112px;
+  animation-delay: 0.32s;
+}
+.tc-target {
+  position: absolute;
+  left: 196px;
+  top: 36px;
+  width: 26px;
+  height: 52px;
+}
+.tc-target::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #2a2f44;
+}
+.tc-target::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 15px;
+  width: 22px;
+  height: 36px;
+  border-radius: 9px 9px 4px 4px;
+  background: #2a2f44;
+}
+.tc-flame {
+  position: absolute;
+  left: 188px;
+  top: 22px;
+  width: 42px;
+  height: 66px;
+  border-radius: 50% 50% 40% 40% / 60% 60% 40% 40%;
+  background: radial-gradient(ellipse at 50% 85%, rgba(255, 220, 120, 0.85), rgba(255, 110, 20, 0.55) 45%, transparent 72%);
+  filter: blur(2px);
+  mix-blend-mode: screen;
+  animation: tcflame 2.4s ease-in-out infinite;
+  opacity: 0;
+}
+@keyframes tcleg {
+  0%,
+  8% {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0);
+  }
+  22% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+  70% {
+    opacity: 1;
+  }
+  90%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes tcspark {
+  0%,
+  14% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  22% {
+    opacity: 1;
+    transform: scale(1.4);
+  }
+  50%,
+  100% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+@keyframes tcflame {
+  0%,
+  30% {
+    opacity: 0;
+    transform: scaleY(0.5);
+  }
+  42% {
+    opacity: 1;
+    transform: scaleY(1.1);
+  }
+  56% {
+    transform: scaleY(0.9);
+  }
+  70% {
+    opacity: 0.9;
+    transform: scaleY(1.05);
+  }
+  100% {
+    opacity: 0;
+  }
+}

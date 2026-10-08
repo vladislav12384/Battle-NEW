@@ -3,11 +3,14 @@
  * renderer and all presentation (FX, audio, HUD). Training-mode sandbox.
  */
 import * as THREE from 'three';
-import { CARDS, cardCharId, CHARACTERS } from '../content';
+import { CARDS, cardCharId, CHARACTERS, sortCards } from '../content';
 import { Bot, type BotLevel, type BotMode } from '../core/ai/bot';
 import { chargeRatio } from '../core/combat';
+import { autoAimPlan } from '../core/fighter';
 import { type InputFrame } from '../core/input';
-import { aimedPoint, chestHeight, chestPos, movePitch, moveReach, strikeLine } from '../core/moves';
+import { aimDirection, aimedPoint, chestHeight, chestPos, movePitch, moveReach, strikeLine } from '../core/moves';
+import { flightRange } from '../core/projectiles';
+import { traceRay } from '../core/ricochet';
 import { DEG, hDistance, vec3, wrapAngle, yawFromDir, yawTo } from '../core/math/vec3';
 import { DEFAULT_ARENA } from '../core/physics';
 import { DT, RULES } from '../core/rules';
@@ -20,7 +23,7 @@ import { Coach, moveName, nextStrikes, onBeatWindow, Tutorial } from './tutorial
 import { InputDevice } from './input';
 import { FighterView, toThree } from './render/fighterView';
 import { Fx } from './render/fx';
-import { OpticFx } from './render/optic';
+import { type BeamStyle, OpticFx } from './render/optic';
 import {
   advanceWalk,
   animate,
@@ -66,6 +69,8 @@ interface ViewEntry {
   color: number;
   /** The recoil's floor blast of the current move has been shown. */
   opticDone: boolean;
+  /** One-shot effects already played for the current move (keyed by name). */
+  moveFx: { move: string | null; frame: number; done: Set<string> };
   /** Airborne last tick (landing of a recoil). */
   wasAir: boolean;
 }
@@ -105,14 +110,23 @@ export interface GameOptions {
   demoMode?: BotMode;
   /** Difficulty of enemy bots. */
   level?: BotLevel;
-  /** Hero card the player starts with (id from CARDS). */
-  card?: string | null;
+  /** Hero cards the player starts with (ids from CARDS). */
+  cards?: string[];
 }
 
+/** Moves that blast from the visor (it charges up before they fire). */
+const OPTIC_VFX = new Set(['optic', 'opticFloor', 'ricochet', 'ricochetSuper', 'opticPoint']);
+/** Moves whose projectile is an eye beam, and how it is drawn. */
+const BEAM_STYLE: Record<string, BeamStyle> = { optic: 'optic', ricochet: 'optic', ricochetSuper: 'super' };
+/** Cyclops' strikes wrapped in ruby energy (trail color). */
+const RUBY_VFX = new Set(['cyclone', 'geneSplice', 'opticPoint']);
+const RUBY = 0xff4a2a;
+const FIRE_COLORS = [0xffe08a, 0xffb040, 0xff7a20, 0xff4a10];
 /** Whether a move is one of Cyclops' eye blasts (charges the visor). */
-const isOptic = (m: MoveDef | null | undefined): boolean => m?.vfx === 'optic' || m?.vfx === 'opticFloor';
+const isOptic = (m: MoveDef | null | undefined): boolean => !!m?.vfx && OPTIC_VFX.has(m.vfx);
 /** Frame on which an optic move lets the beam out. */
 const opticFireFrame = (m: MoveDef): number => m.projectiles?.[0]?.frame ?? m.startup + 1;
+const beamStyle = (m: MoveDef | null | undefined): BeamStyle | null => (m?.vfx ? (BEAM_STYLE[m.vfx] ?? null) : null);
 
 export class Game {
   sim!: Simulation;
@@ -136,9 +150,11 @@ export class Game {
     hints: true,
     allies: 0,
     enemies: 1,
-    /** Equipped hero card (null = none). */
-    card: null as string | null,
+    /** Equipped hero cards (ids from CARDS, in CARDS order). */
+    cards: [] as string[],
   };
+  /** The last non-empty set of cards (C puts it back on). */
+  private lastCards: string[] = [];
   paused = true;
   private time = 0;
   private acc = 0;
@@ -165,8 +181,10 @@ export class Game {
   scriptedInput: ((tick: number, game: Game) => Partial<InputFrame>) | null = null;
   /** Called when the difficulty is changed in game (to remember it). */
   onLevelChange: ((level: BotLevel) => void) | null = null;
-  /** Called when a card is equipped or taken off in game. */
-  onCardChange: ((card: string | null) => void) | null = null;
+  /** Called when cards are equipped or taken off in game. */
+  onCardChange: ((cards: string[]) => void) | null = null;
+  /** Ricochet super: who the visor would hit right now (null = no point / no card), refreshed a few times a second. */
+  private rico: { target: number; ok: boolean } | null = null;
   /** Visor charge of the local player's eyes (0..1) and the flash of a shot, for the HUD. */
   private visorCharge = 0;
   private visorFlash = 0;
@@ -191,7 +209,8 @@ export class Game {
     this.settings.allies = opts.allies ?? 0;
     if (opts.dummyMode) this.settings.dummyMode = opts.dummyMode;
     if (opts.level) this.settings.level = opts.level;
-    if (opts.card && CARDS[opts.card]) this.settings.card = opts.card;
+    this.settings.cards = sortCards((opts.cards ?? []).filter((c) => CARDS[c]));
+    this.lastCards = this.settings.cards.length ? [...this.settings.cards] : Object.keys(CARDS);
     this.resetScenario();
     this.showCard();
     window.addEventListener('resize', () => this.world.resize());
@@ -235,33 +254,40 @@ export class Game {
     this.bots.set(f.id, bot);
   }
 
-  /** The character the player fights as: Striker, with the equipped card plugged in. */
+  /** The character the player fights as: Striker, with the equipped cards plugged in. */
   private playerChar(): string {
-    const c = this.settings.card;
-    return c && CARDS[c] ? cardCharId('striker', [c]) : 'striker';
+    return this.settings.cards.length ? cardCharId('striker', this.settings.cards) : 'striker';
   }
 
   /**
-   * Equips a hero card (null takes it off). The fight goes on: only the
-   * moveset changes. `reveal` plays the card reveal.
+   * Equips a set of hero cards (empty takes them all off). The fight goes on:
+   * only the moveset changes. `reveal` plays the reveal of the cards just added.
    */
-  equipCard(id: string | null, reveal = true): void {
-    this.settings.card = id && CARDS[id] ? id : null;
+  equipCards(ids: readonly string[], reveal = true): void {
+    const before = this.settings.cards;
+    this.settings.cards = sortCards(ids.filter((c) => CARDS[c]));
+    if (this.settings.cards.length) this.lastCards = [...this.settings.cards];
     const me = this.player;
     if (me) me.charId = this.playerChar();
     this.showCard();
-    const card = this.settings.card ? CARDS[this.settings.card] : null;
-    if (card && reveal) {
-      this.hud.cardReveal(card);
+    const added = this.settings.cards.filter((c) => !before.includes(c)).map((c) => CARDS[c]);
+    if (added.length && reveal) {
+      this.hud.cardReveal(added);
       this.audio.play('card');
-    } else if (!card) this.hud.callout('Карта убрана', 'info');
-    this.onCardChange?.(this.settings.card);
+    } else if (!this.settings.cards.length && before.length) this.hud.callout(before.length > 1 ? 'Карты убраны' : 'Карта убрана', 'info');
+    this.onCardChange?.(this.settings.cards);
+  }
+
+  /** Takes one card / puts it back. */
+  toggleCard(id: string, reveal = true): void {
+    const has = this.settings.cards.includes(id);
+    this.equipCards(has ? this.settings.cards.filter((c) => c !== id) : [...this.settings.cards, id], reveal);
   }
 
   private showCard(): void {
-    const card = this.settings.card ? CARDS[this.settings.card] : null;
-    this.hud.buildMoveList(CHARACTERS[this.playerChar()], card);
-    this.hud.cardBadge(card);
+    const cards = this.settings.cards.map((c) => CARDS[c]);
+    this.hud.buildMoveList(CHARACTERS[this.playerChar()], cards);
+    this.hud.cardBadge(cards);
   }
 
   /** Starts the tutorial course from the first lesson. */
@@ -408,7 +434,7 @@ export class Game {
         this.hud.toggleMoveList();
         break;
       case 'KeyC':
-        this.equipCard(this.settings.card ? null : Object.keys(CARDS)[0]);
+        this.equipCards(this.settings.cards.length ? [] : this.lastCards);
         break;
     }
   }
@@ -459,6 +485,7 @@ export class Game {
           squash: new Spring(0),
           color,
           opticDone: false,
+          moveFx: { move: null, frame: 0, done: new Set() },
           wasAir: !f.grounded,
         };
         e.mem.lastX = f.pos.x;
@@ -499,6 +526,8 @@ export class Game {
     this.trackAdvantage(events);
     for (const e of events) this.present(e);
     this.opticTick();
+    this.cardTick();
+    this.ricoTick();
     this.tutorialTick(events);
     const tip = this.settings.hints && !this.tutorial ? this.coach.update(sim, this.player, events, this.threatHeavy) : null;
     this.tipText = tip?.text ?? null;
@@ -567,31 +596,33 @@ export class Game {
   private hasVisor(charId: string): boolean {
     let v = this.opticChars.get(charId);
     if (v === undefined) {
-      v = Object.values(CHARACTERS[charId]?.moves ?? {}).some((m) => m.vfx === 'optic');
+      v = Object.values(CHARACTERS[charId]?.moves ?? {}).some((m) => isOptic(m) && m.vfx !== 'opticFloor');
       this.opticChars.set(charId, v);
     }
     return v;
   }
 
   /** A fighter's eyes let an optic bolt out. */
-  private fireBeam(p: ProjectileState, ownerId: number): void {
+  private fireBeam(p: ProjectileState, ownerId: number, style: BeamStyle): void {
     const owner = this.sim.fighter(ownerId);
     const eyes = owner ? this.eyesOf(owner) : this.worldPoint(p.prevPos);
     const mine = ownerId === this.playerId;
+    const hot = style === 'super';
     // Seen from our own eyes the beam is thinner: it leaves from just under the view.
-    this.optic.fire(p.id, ownerId, eyes, this.worldPoint(p.pos), mine && !this.settings.thirdPerson ? 0.5 : 1);
-    this.audio.play('optic', owner ? this.nearCamera(owner.pos) * 1.1 : 1);
+    this.optic.fire(p.id, ownerId, eyes, this.worldPoint(p.pos), (mine && !this.settings.thirdPerson ? 0.5 : 1) * (hot ? 1.35 : 1), style);
+    this.audio.play(hot ? 'opticSuper' : 'optic', owner ? this.nearCamera(owner.pos) * 1.1 : 1);
+    if (hot) this.optic.endCalc();
     if (mine) {
       // The blast pushes the head back: the view kicks up, the screen flashes red.
-      this.visorFlash = 0.6;
-      this.hud.flash('rgba(255,70,40,1)', 0.07);
-      this.kick.pitch += 0.022;
-      this.kick.fov -= 4;
-      this.fx.shake(0.12);
+      this.visorFlash = hot ? 1 : 0.6;
+      this.hud.flash(hot ? 'rgba(255,150,60,1)' : 'rgba(255,70,40,1)', hot ? 0.16 : 0.07);
+      this.kick.pitch += hot ? 0.05 : 0.022;
+      this.kick.fov -= hot ? 7 : 4;
+      this.fx.shake(hot ? 0.3 : 0.12);
     }
     if (!mine || this.settings.thirdPerson) {
-      this.fx.flash(eyes, 0xff3a24, 0.7, 0.12);
-      this.fx.ring(eyes, 0xff6a50, 0.7, 0.16);
+      this.fx.flash(eyes, hot ? 0xff8a30 : 0xff3a24, hot ? 1.3 : 0.7, 0.12);
+      this.fx.ring(eyes, hot ? 0xffb050 : 0xff6a50, hot ? 1.4 : 0.7, 0.16);
     }
   }
 
@@ -653,6 +684,132 @@ export class Game {
     }
   }
 
+  /** A one-shot effect of the current move: true the first time it is asked for during this move. */
+  private once(e: ViewEntry, f: FighterState, key: string): boolean {
+    const start = this.sim.state.frame - f.moveFrame;
+    if (e.moveFx.move !== f.move || Math.abs(e.moveFx.frame - start) > 2) e.moveFx = { move: f.move, frame: start, done: new Set() };
+    if (e.moveFx.done.has(key)) return false;
+    e.moveFx.done.add(key);
+    return true;
+  }
+
+  /**
+   * Per-tick presentation of the Ricochet card's strikes (whirl take-off and
+   * landing, the point-blank blast, the gene splice's light pillar) and of
+   * burning fighters.
+   */
+  private cardTick(): void {
+    const fx = this.fx;
+    for (const f of this.sim.state.fighters) {
+      const e = this.views.get(f.id);
+      if (!e) continue;
+      if (f.burn > 0 && f.state !== 'ko') this.flames(f);
+      const m = f.state === 'attack' ? this.sim.moveOf(f) : null;
+      if (!m?.vfx || !RUBY_VFX.has(m.vfx)) continue;
+      const me = f.id === this.playerId;
+      const fp = me && !this.settings.thirdPerson;
+      const fwd = new THREE.Vector3(-Math.sin(f.yaw), 0, -Math.cos(f.yaw));
+      const feet = new THREE.Vector3(f.pos.x, 0.06, f.pos.z);
+      const hit = m.startup + 1;
+      if (m.vfx === 'cyclone') {
+        const release = Math.max(2, hit - Math.max(2, Math.min(6, Math.round((hit - 2) * 0.3))));
+        if (f.moveFrame >= release && this.once(e, f, 'takeoff')) {
+          // Take-off: the floor spits dust in a spiral, the air whirls.
+          fx.shock(feet, new THREE.Vector3(0, 1, 0), 0xc8beb0, 2.2, 0.35, 0.55);
+          fx.spark(feet, { color: 0xa09484, count: 26, speed: 4, size: 0.2, gravity: 2, life: 0.7, dir: new THREE.Vector3(0, 0.5, 0), spread: 1.1 });
+          this.audio.play('cyclone', this.nearCamera(f.pos) * 1.2);
+          if (fp) this.kick.roll += 0.06;
+        }
+        if (f.moveFrame >= m.startup + m.active + 8 && this.once(e, f, 'land')) {
+          fx.spark(feet, { color: 0xa09484, count: 18, speed: 3, size: 0.18, gravity: 3, life: 0.6, dir: new THREE.Vector3(0, 0.4, 0), spread: 1 });
+          this.audio.play('land', this.nearCamera(f.pos));
+        }
+        if (fp && f.moveFrame >= release && f.moveFrame < hit) this.kick.roll -= 0.012;
+      } else if (m.vfx === 'opticPoint') {
+        if (f.moveFrame >= hit && this.once(e, f, 'blast')) this.pointBlankFx(f, fwd, fp);
+      } else if (m.vfx === 'geneSplice') {
+        const box = m.hitboxes[0];
+        const fist = e.joints ? e.view.root.localToWorld(toThree(e.joints.rHand)) : new THREE.Vector3(f.pos.x, f.pos.y + 1, f.pos.z);
+        // The cocked fist smoulders ruby, sparks stream off it as it rises.
+        if (f.moveFrame < hit && !fp) fx.spark(fist, { color: f.moveFrame > hit - 6 ? 0xffb090 : RUBY, count: 2, speed: 1.5, size: 0.08, gravity: -2, life: 0.3 });
+        if (box && f.moveFrame >= box.frames[0] && this.once(e, f, 'pillar')) {
+          // A column of ruby light shoots up through the opponent.
+          const base = new THREE.Vector3(f.pos.x, 0.05, f.pos.z).addScaledVector(fwd, 0.55);
+          this.optic.flashBeam(base, base.clone().setY(6.5), fp ? 0.9 : 1.4, 0.26);
+          for (let i = 0; i < 3; i++) fx.shock(base.clone().setY(0.9 + i * 1.3), new THREE.Vector3(0, 1, 0), i % 2 ? 0xffb090 : RUBY, 0.8 + i * 0.35, 0.3 + i * 0.06, 0.7);
+          fx.spark(base.clone().setY(1.6), { color: 0xff7a50, count: 30, speed: 9, size: 0.08, gravity: 3, life: 0.5, dir: new THREE.Vector3(0, 1, 0), spread: 0.35 });
+          this.audio.play('geneSplice', this.nearCamera(f.pos) * 1.2);
+          if (me) {
+            this.kick.pitch -= 0.05;
+            this.kick.fov += 6;
+          }
+        }
+      }
+    }
+  }
+
+  /** The point-blank optic discharges: a fat, short beam into the face and a cone of blast waves. */
+  private pointBlankFx(f: FighterState, fwd: THREE.Vector3, fp: boolean): void {
+    const fx = this.fx;
+    const eyes = this.eyesOf(f);
+    const a = aimDirection(f.yaw, Math.max(-RULES.maxPitch, Math.min(RULES.maxPitch, f.aimPitch)));
+    const dir = new THREE.Vector3(a.x, a.y, a.z);
+    void fwd;
+    const end = eyes.clone().addScaledVector(dir, 2.1);
+    this.optic.flashBeam(eyes, end, fp ? 1.7 : 2.5, 0.16);
+    for (let i = 0; i < 3; i++) {
+      const at = eyes.clone().addScaledVector(dir, 0.5 + i * 0.55);
+      fx.shock(at, dir, i === 0 ? 0xffd0c0 : RUBY, 0.7 + i * 0.45, 0.2 + i * 0.05, 0.75);
+    }
+    fx.flash(end, 0xff5a30, 1.6, 0.12);
+    fx.spark(end, { color: 0xff8a50, count: 36, speed: 10, size: 0.08, gravity: 5, life: 0.4, dir, spread: 0.5 });
+    fx.spark(end, { color: 0x9a8f86, count: 12, speed: 2, size: 0.3, gravity: -0.5, life: 0.8, dir, spread: 1 });
+    this.audio.play('pointBlank', this.nearCamera(f.pos) * 1.2);
+    if (f.id === this.playerId) {
+      this.visorFlash = 0.9;
+      this.hud.flash('rgba(255,90,50,1)', 0.12);
+      this.kick.pitch += 0.06;
+      this.kick.fov += 8;
+      this.kick.push -= 0.05;
+      this.fx.shake(0.32);
+    } else if (hDistance(f.pos, this.world.camera.position) < 7) this.fx.shake(0.15);
+  }
+
+  /** Flames licking up a burning body: tongues of fire, a flickering glow, sparks flying off. */
+  private flames(f: FighterState): void {
+    const s = this.sim.statsOf(f);
+    const fp = f.id === this.playerId && !this.settings.thirdPerson;
+    // A body knocked down burns lying along the floor.
+    const lying = f.state === 'knockdown' || f.state === 'juggle';
+    const n = fp ? 1 : 5;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = s.radius * (0.3 + Math.random() * 0.7);
+      const h = lying ? 0.1 + Math.random() * 0.5 : 0.15 + Math.random() * (s.height - 0.25);
+      const at = new THREE.Vector3(f.pos.x + Math.cos(a) * r, f.pos.y + h, f.pos.z + Math.sin(a) * r);
+      // Hot white-yellow at the bottom of a tongue, red at the top.
+      const c = FIRE_COLORS[Math.min(FIRE_COLORS.length - 1, Math.floor((h / s.height) * 2 + Math.random() * 2.2))];
+      this.fx.spark(at, { color: c, count: 1, speed: 1.1, size: 0.3 + Math.random() * 0.25, gravity: -7, life: 0.38 + Math.random() * 0.2, dir: new THREE.Vector3(0, 1, 0), spread: 0.35 });
+    }
+    if (!fp && this.sim.state.frame % 3 === 0) {
+      this.fx.flash(new THREE.Vector3(f.pos.x, f.pos.y + (lying ? 0.4 : s.height * 0.55), f.pos.z), 0xff7a20, 1.6 + Math.random() * 0.5, 0.09);
+    }
+    if (Math.random() < 0.35) this.fx.spark(new THREE.Vector3(f.pos.x, f.pos.y + s.height * 0.7, f.pos.z), { color: 0xffd080, count: 1, speed: 3, size: 0.05, gravity: -3, life: 0.7, spread: 1 });
+  }
+
+  /** The ricochet super's readiness: does the visor see a path to someone right now? */
+  private ricoTick(): void {
+    const me = this.player;
+    const m = me ? this.sim.moveById(me.charId, 'ricochet_super') : null;
+    if (!me || !m || me.meter < (m.meterCost ?? 0) || me.state === 'ko') {
+      this.rico = null;
+      return;
+    }
+    if (this.sim.state.frame % 8 !== 0 && this.rico) return;
+    const plan = autoAimPlan(this.sim, me, m);
+    this.rico = { target: plan?.target.id ?? -1, ok: !!plan };
+  }
+
   private reactToHit(victimId: number, attackerId: number, dir: { x: number; y: number; z: number }, point: { y: number }, strength: number): void {
     const v = this.sim.fighter(victimId);
     const ve = this.views.get(victimId);
@@ -678,7 +835,9 @@ export class Game {
         const at = this.worldPoint(e.point);
         const heavy = e.effect === 'heavy' || e.effect === 'launch' || e.effect === 'spike' || e.effect === 'throw' || e.damage >= 60;
         const attacker = this.sim.fighter(e.attacker);
-        const optic = !!attacker && !!e.move && this.sim.moveById(attacker.charId, e.move)?.vfx === 'optic';
+        const hm = attacker && e.move ? this.sim.moveById(attacker.charId, e.move) : null;
+        const optic = isOptic(hm);
+        const superBeam = hm?.vfx === 'ricochetSuper';
         const color = optic ? 0xff4a2a : e.effect === 'energy' ? 0x66ccff : e.effect === 'burst' ? 0xffffff : e.counter ? 0xff4444 : 0xffc04d;
         const dir = attacker ? new THREE.Vector3(at.x - attacker.pos.x, 0.3, at.z - attacker.pos.z).normalize() : undefined;
         const victim = this.sim.fighter(e.victim);
@@ -703,6 +862,15 @@ export class Game {
           fx.spark(at, { color: 0xff8a50, count: 26, speed: 7, size: 0.08, gravity: 7, dir: kdir, spread: 0.7, life: 0.55 });
           fx.shock(at, kdir, 0xff5a30, 1.9, 0.26, 0.8);
           sfx.play('sizzle', this.nearCamera(at));
+        }
+        if (superBeam) {
+          // The computed shot lands: a burst of fire.
+          fx.flash(at, 0xffa040, 3.2, 0.2);
+          fx.shock(at, kdir, 0xffc070, 3.4, 0.36, 0.9);
+          fx.spark(at, { color: 0xffd080, count: 40, speed: 12, size: 0.1, gravity: 4, dir: kdir, spread: 0.8, life: 0.5 });
+          for (const c of FIRE_COLORS) fx.spark(at, { color: c, count: 8, speed: 3, size: 0.28, gravity: -5, life: 0.55, spread: 1 });
+          this.impactFrame = Math.max(this.impactFrame, 0.05);
+          sfx.play('impact', 1.2);
         }
         if (head && (heavy || e.counter)) {
           // Spit / sweat spray flying with the blow.
@@ -879,6 +1047,10 @@ export class Game {
         const m = f ? this.sim.moveById(f.charId, e.move) : null;
         if (f && isOptic(m)) sfx.play('opticCharge', this.nearCamera(f.pos));
         else if (f) sfx.play(m && m.kind !== 'light' ? 'whooshHeavy' : 'whoosh', this.nearCamera(f.pos) * 0.8);
+        // A super point in hand but no path to anyone: the plain ricochet came out, the point is kept.
+        if (f && e.fighter === me && e.move === 'ricochet' && this.sim.moveById(f.charId, 'ricochet_super') && f.meter >= 100) {
+          hud.note('НЕТ ТРАЕКТОРИИ — очко сохранено, обычный рикошет', 'poise');
+        }
         if (e.fighter === me && m) {
           hud.strike(moveName(m.id, m.name), f?.stringPos ?? 1);
           if (f && f.rhythm === 0) hud.rhythm(0);
@@ -922,7 +1094,8 @@ export class Game {
         if (f) {
           const at = this.worldPoint(chestPos(f, this.sim.statsOf(f)));
           fx.ring(at, 0xffdd55, 4, 0.5);
-          fx.spark(at, { color: 0xffdd55, count: 60, speed: 8, life: 0.5 });
+          // Not from inside our own chest: the sparks would fill the view.
+          if (e.fighter !== me || this.settings.thirdPerson) fx.spark(at, { color: 0xffdd55, count: 60, speed: 8, life: 0.5 });
         }
         hud.callout(e.fighter === me ? 'SUPER!' : 'ENEMY SUPER!', 'gold');
         hud.flash('rgba(255,230,120,1)', 0.2);
@@ -994,8 +1167,54 @@ export class Game {
         break;
       case 'projectile': {
         const p = this.sim.state.projectiles.find((x) => x.id === e.id);
-        if (p && this.sim.moveById(p.charId, p.moveId)?.vfx === 'optic') this.fireBeam(p, e.owner);
+        const style = p ? beamStyle(this.sim.moveById(p.charId, p.moveId)) : null;
+        if (p && style) this.fireBeam(p, e.owner, style);
         else sfx.play('blast', 0.8);
+        break;
+      }
+      case 'bounce': {
+        const at = this.worldPoint(e.point);
+        const n = this.worldPoint(e.normal);
+        const p = this.sim.state.projectiles.find((x) => x.id === e.id);
+        const out = p ? new THREE.Vector3(p.vel.x, p.vel.y, p.vel.z).normalize() : n.clone();
+        const style = this.optic.styleOf(e.id) ?? 'optic';
+        this.optic.bend(e.id, at);
+        this.optic.ricochet(at, n, out, style);
+        // Every bounce sings a little higher.
+        sfx.play('ricochet', 1 + (e.count - 1) * 0.12);
+        if (this.world.camera.position.distanceTo(at) < 6) fx.shake(0.1);
+        break;
+      }
+      case 'ricochetPlan': {
+        const f = this.sim.fighter(e.fighter);
+        const m = f ? this.sim.moveById(f.charId, f.move ?? '') : null;
+        const fire = m ? opticFireFrame(m) : 20;
+        const pts = e.points.map((q) => this.worldPoint(q));
+        if (f) pts[0] = this.eyesOf(f);
+        this.optic.calc(pts, fire / 60);
+        sfx.play('calc', f ? this.nearCamera(f.pos) * 1.2 : 1);
+        if (e.fighter === me) hud.note('ВИЗОР РАССЧИТАЛ ТРАЕКТОРИЮ', 'perfect');
+        else if (e.target === me) hud.note('ТЕБЯ ВЗЯЛИ НА ПРИЦЕЛ — уходи рывком', 'poise');
+        break;
+      }
+      case 'ignite': {
+        const v = this.sim.fighter(e.fighter);
+        if (v) {
+          const at = this.worldPoint(chestPos(v, this.sim.statsOf(v)));
+          fx.flash(at, 0xff8a30, 2.6, 0.2);
+          for (const c of FIRE_COLORS) fx.spark(at, { color: c, count: 10, speed: 4, size: 0.3, gravity: -6, life: 0.6, spread: 1 });
+          sfx.play('ignite', this.nearCamera(v.pos) * 1.3);
+          this.views.get(v.id)?.view.hitFlash(2, 0xff8a30);
+        }
+        if (e.fighter === me || e.by === me) hud.callout('ПОДЖОГ!', 'orange');
+        break;
+      }
+      case 'burn': {
+        const v = this.sim.fighter(e.fighter);
+        if (!v) break;
+        const s = this.sim.statsOf(v);
+        hud.damageNumber({ x: v.pos.x, y: v.pos.y + s.height * 0.85, z: v.pos.z }, e.damage, 'burn');
+        sfx.play('burn', this.nearCamera(v.pos) * 0.9);
         break;
       }
       case 'projectileEnd': {
@@ -1101,8 +1320,10 @@ export class Game {
         const fr = f.moveFrame + (f.hitstop > 0 ? 0 : frac);
         charge = fr < fire ? (fr / fire) ** 1.6 : Math.max(0, 1 - (fr - fire) / 12);
       }
-      if (this.hasVisor(f.charId)) e.view.setVisor(0xff2814, 1.6 + charge * 9, charge);
+      if (this.hasVisor(f.charId)) e.view.setVisor(cm?.vfx === 'ricochetSuper' ? 0xff6a14 : 0xff2814, 1.6 + charge * 9, charge);
       else e.view.setVisor(e.color, 0.7);
+      e.view.setAura(cm?.vfx && RUBY_VFX.has(cm.vfx) ? RUBY : e.color);
+      e.view.setBurn(f.burn > 0 && f.state !== 'ko' ? 0.55 + 0.35 * Math.sin(this.time * 23 + f.id) + 0.1 * Math.sin(this.time * 61) : 0);
       if (isMe) this.visorCharge = charge;
       const joints = solveSkeleton(stats, pose);
       e.joints = joints;
@@ -1110,7 +1331,9 @@ export class Game {
       e.view.root.updateMatrixWorld();
 
       if (pose.striking.length) {
-        const color = f.team === 0 ? 0x9fd0ff : 0xffb080;
+        const sm = sim.moveOf(f);
+        const ruby = !!sm?.vfx && RUBY_VFX.has(sm.vfx);
+        const color = ruby ? RUBY : f.team === 0 ? 0x9fd0ff : 0xffb080;
         for (const limb of pose.striking) {
           const pair =
             limb === 'lHand' ? (['lElbow', 'lHand'] as const)
@@ -1120,7 +1343,7 @@ export class Game {
             : (['hip', 'chest'] as const);
           const base = e.view.root.localToWorld(toThree(joints[pair[0]]));
           const tip = e.view.root.localToWorld(toThree(joints[pair[1]]));
-          this.fx.trailSample(`${f.id}:${limb}`, base, tip, color, !fp && sim.moveOf(f)?.kind !== 'light');
+          this.fx.trailSample(`${f.id}:${limb}`, base, tip, color, ruby || (!fp && sim.moveOf(f)?.kind !== 'light'));
         }
       }
       if (e.tell) {
@@ -1164,7 +1387,13 @@ export class Game {
     this.updateCamera(me, headWorld, meJoints, shake, dt);
     this.cameraOverride?.(this.world.camera, this);
     this.trackBeams(frac);
+    this.optic.aimPreview(me ? this.bankPreview(me) : null);
     this.optic.update(dt, this.world.camera.position);
+    this.hud.burning(me && me.burn > 0 && me.state !== 'ko' ? 0.5 + 0.25 * Math.sin(this.time * 17) : 0);
+    // Ricochet super ready: a reticle on whoever the visor would hit.
+    const rt = this.rico?.ok ? sim.fighter(this.rico.target) : undefined;
+    const rp = rt ? this.project(chestPos(rt, sim.statsOf(rt))) : null;
+    this.hud.ricochet(this.rico ? { ok: this.rico.ok, x: rp?.x ?? null, y: rp?.y ?? null } : null);
     // Seen from inside the visor: a red glow at the edges while the eyes charge and fire.
     this.visorFlash = Math.max(0, this.visorFlash - dt * 4);
     this.hud.visor(firstPerson && me ? Math.max(this.visorCharge * 0.6, this.visorFlash) : 0);
@@ -1216,6 +1445,28 @@ export class Game {
     this.world.render();
   }
 
+  /**
+   * While a plain ricochet winds up, where it would bank if it left now (a
+   * faint laser sight: aim it yourself, this only shows the angle).
+   */
+  private bankPreview(me: FighterState): THREE.Vector3[] | null {
+    const m = me.state === 'attack' ? this.sim.moveOf(me) : null;
+    const def = m?.projectiles?.[0];
+    if (!m || !def || m.vfx !== 'ricochet' || me.moveFrame >= def.frame) return null;
+    const from = vec3(me.pos.x, me.pos.y + def.offset[1], me.pos.z);
+    const yaw = me.lockTarget >= 0 ? me.yaw : this.input.yaw;
+    const pitch = me.lockTarget >= 0 ? me.aimPitch : this.input.pitch;
+    const t = traceRay(this.sim.arena, from, aimDirection(yaw, pitch), { maxLength: Math.min(flightRange(def), 30), maxBounces: Math.min(2, def.bounces ?? 0) });
+    const pts = t.points.map((q) => this.worldPoint(q));
+    pts[0] = this.eyesOf(me);
+    // From our own eyes the sight starts a little ahead, so it never fills the view.
+    if (!this.settings.thirdPerson && pts.length > 1) {
+      const d = pts[0].distanceTo(pts[1]);
+      pts[0].lerp(pts[1], Math.min(0.9, 1.4 / Math.max(d, 1e-3)));
+    }
+    return pts;
+  }
+
   /** Live beams follow their bolts; while the shooter still fires the tail stays on its eyes. */
   private trackBeams(frac: number): void {
     const sim = this.sim;
@@ -1223,14 +1474,23 @@ export class Game {
     for (const p of sim.state.projectiles) {
       if (!this.optic.has(p.id)) continue;
       alive.add(p.id);
-      const tip = new THREE.Vector3(
-        p.prevPos.x + (p.pos.x - p.prevPos.x) * frac,
-        p.prevPos.y + (p.pos.y - p.prevPos.y) * frac,
-        p.prevPos.z + (p.pos.z - p.prevPos.z) * frac,
-      );
+      // Along this tick's flight (around the corners of a bounce).
+      const pts = [p.prevPos, ...p.path, p.pos].map((q) => this.worldPoint(q));
+      let total = 0;
+      for (let i = 1; i < pts.length; i++) total += pts[i - 1].distanceTo(pts[i]);
+      let left = total * frac;
+      let tip = pts[pts.length - 1].clone();
+      for (let i = 1; i < pts.length; i++) {
+        const d = pts[i - 1].distanceTo(pts[i]);
+        if (left <= d) {
+          tip = pts[i - 1].clone().lerp(pts[i], d > 1e-6 ? left / d : 0);
+          break;
+        }
+        left -= d;
+      }
       const owner = p.reflected ? undefined : sim.fighter(p.owner);
       const om = owner?.state === 'attack' ? sim.moveOf(owner) : null;
-      const firing = !!owner && om?.vfx === 'optic' && owner.moveFrame <= opticFireFrame(om) + om.active + 1;
+      const firing = !!owner && !!beamStyle(om) && !!om && owner.moveFrame <= opticFireFrame(om) + om.active + 1;
       this.optic.track(p.id, tip, firing && owner ? this.eyesOf(owner) : null);
     }
     this.optic.prune(alive);
