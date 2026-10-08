@@ -13,10 +13,15 @@ export const Button = {
   SUPER: 1 << 8,
   LOCK: 1 << 9,
   KICK: 1 << 10,
+  /**
+   * RMB + E together (power + special): the strong special. Derived by the
+   * simulation from the two buttons, so players, bots and gamepads get it alike.
+   */
+  EX: 1 << 11,
 } as const;
 
 export type ButtonName = keyof typeof Button;
-export const BUTTON_COUNT = 11;
+export const BUTTON_COUNT = 12;
 
 /**
  * Direction of the look "flick" at the moment an attack button is pressed
@@ -103,6 +108,11 @@ export function feedInput(buf: InputBuffer, input: InputFrame, frozen: boolean):
 /** True if `button` was freshly pressed within the last `window` frames and not yet consumed. */
 export function buffered(buf: InputBuffer, button: number, window: number = RULES.inputBuffer): boolean {
   return buf.pressAge[bitIndex(button)] <= window;
+}
+
+/** Frames since `button` was freshly pressed (large when consumed or never). */
+export function pressAge(buf: InputBuffer, button: number): number {
+  return buf.pressAge[bitIndex(button)];
 }
 
 export function consume(buf: InputBuffer, button: number): void {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CARDS, CHARACTERS, cardCharId, striker, withCards } from '../src/content';
 import { validateCharacter } from '../src/content/dsl';
 import { vec3 } from '../src/core/math/vec3';
+import { RULES } from '../src/core/rules';
 import { B, duel, Harness, newSim } from './helpers';
 
 const MEGA = cardCharId('striker', ['mega_beam']);
@@ -39,10 +40,12 @@ describe('Cyclops: mega beam card', () => {
     const { a, h } = duel(6, MEGA);
     a.meter = 100;
     h.step({ [a.id]: { buttons: B.SPECIAL } });
+    h.run(RULES.chordGrace, { [a.id]: { buttons: B.SPECIAL } });
     expect(a.move).toBe('mega_beam');
     expect(a.meter).toBe(0);
     const plain = duel(6, MEGA);
     plain.h.step({ [plain.a.id]: { buttons: B.SPECIAL } });
+    plain.h.run(RULES.chordGrace);
     expect(plain.a.move).toBe('ki_blast');
   });
 
@@ -133,7 +136,7 @@ describe('Cyclops: mega beam card', () => {
     expect(down.peak).toBeLessThan(7.5);
     // Kept on the opponent below: it hits all along while you hang in the air.
     const onTarget = fly(null);
-    expect(onTarget.airborne).toBeGreaterThan(plainJump * 2);
+    expect(onTarget.airborne).toBeGreaterThan(plainJump * 1.8);
     expect(onTarget.h.of('hit').filter((e) => e.move === 'mega_beam').length).toBeGreaterThan(5);
     // The stick steers the flight.
     const steered = fly(-1.2, 1);

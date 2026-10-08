@@ -20,7 +20,7 @@ import { DEG } from '../../core/math/vec3';
 import type { CharacterDef, HitDef, MoveDef } from '../../core/types';
 import { box, mirror, moveList, sweep, type TempoScale, tempoMoves } from '../dsl';
 
-const { LIGHT: L, HEAVY: H, SPECIAL: E, GRAB: G } = Button;
+const { LIGHT: L, HEAVY: H, SPECIAL: E, GRAB: G, EX } = Button;
 
 /**
  * Global pacing of the character. Moves below are authored at "arcade" speed
@@ -712,8 +712,9 @@ export const striker: CharacterDef = {
     // LMB + RMB together: throw.
     { move: 'grab', button: G, air: false },
 
-    // Special (E): with a full ki bar it is the super.
-    { move: 'shoulder_rush', button: E, dir: 'forward', air: false },
+    // Special (E): with a full ki bar it is the super. RMB + E together: the shoulder rush
+    // (not forward + E: everybody walks forward all the time).
+    { move: 'shoulder_rush', button: EX, air: false },
     { move: 'rising_dragon', button: E, dir: 'back', air: false },
     { move: 'barrage', button: E, air: false },
     { move: 'ki_blast', button: E, air: false },

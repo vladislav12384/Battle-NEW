@@ -18,6 +18,7 @@ import {
   feedInput,
   type InputFrame,
   isHeld,
+  pressAge,
   pressSwipe,
   stickDir,
 } from './input';
@@ -58,10 +59,14 @@ export interface FighterHost extends ProjectileHost {
 const STRIKE_BUTTONS = Button.LIGHT | Button.HEAVY | Button.KICK;
 
 export function updateFighter(sim: FighterHost, f: FighterState, input: InputFrame): void {
+  // RMB + E held together: the chord button.
+  if ((input.buttons & Button.HEAVY) !== 0 && (input.buttons & Button.SPECIAL) !== 0) {
+    input = { ...input, buttons: input.buttons | Button.EX };
+  }
   const frozen = f.hitstop > 0;
   const fresh = input.buttons & ~f.input.prevButtons & STRIKE_BUTTONS;
-  // Both attack buttons together is a throw, not mashing.
-  const chord = (input.buttons & ~f.input.prevButtons & Button.GRAB) !== 0;
+  // Both attack buttons together is a throw, RMB + E the chord: neither is mashing.
+  const chord = (input.buttons & ~f.input.prevButtons & (Button.GRAB | Button.EX)) !== 0;
   feedInputFrame(f, input, frozen);
   if (fresh && !chord && f.state === 'attack') judgePress(sim, f, fresh);
   if (f.shake > 0) f.shake--;
@@ -274,11 +279,16 @@ function findCommand(
   filter?: (m: MoveDef) => boolean,
   /** Position the next strike would take in the current string (1 = opener). */
   seq = 1,
+  /** Only commands on this button. */
+  only?: number,
 ): CommandDef | null {
   const dir = stickDir(input);
   const air = !f.grounded;
   for (const cmd of sim.charCommands(f)) {
+    if (only !== undefined && cmd.button !== only) continue;
     if (!buffered(f.input, cmd.button)) continue;
+    // E waits a moment for RMB: pressed together they are the RMB + E chord.
+    if (cmd.button === Button.SPECIAL && pressAge(f.input, Button.SPECIAL) < RULES.chordGrace && !isHeld(f.input, Button.HEAVY)) continue;
     // Moves on the dash button replace dashes: out of reach while exhausted, like a dash.
     if (cmd.button === Button.DODGE && f.exhausted) continue;
     if (cmd.air !== undefined && cmd.air !== air) continue;
@@ -318,14 +328,20 @@ function tryCommand(
   input: InputFrame,
   filter?: (m: MoveDef) => boolean,
   seq = 1,
+  only?: number,
 ): boolean {
-  const cmd = findCommand(sim, f, input, filter, seq);
+  const cmd = findCommand(sim, f, input, filter, seq, only);
   if (!cmd) return false;
   consume(f.input, cmd.button);
   // A throw is both attack buttons: neither should also come out as a strike.
   if (cmd.button === Button.GRAB) {
     consume(f.input, Button.LIGHT);
     consume(f.input, Button.HEAVY);
+  }
+  // The same for the RMB + E chord.
+  if (cmd.button === Button.EX) {
+    consume(f.input, Button.HEAVY);
+    consume(f.input, Button.SPECIAL);
   }
   startMove(sim, f, cmd.move, seq);
   return true;
@@ -861,6 +877,10 @@ function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void
   if (f.stringPos === 1 && f.moveFrame <= 4 && m.kind !== 'throw' && buffered(f.input, Button.GRAB, 4)) {
     if (tryCommand(sim, f, input, (n) => n.kind === 'throw')) return;
   }
+  // RMB a moment before E (or E a moment before RMB): it was the chord.
+  if (f.stringPos === 1 && f.moveFrame <= RULES.chordWindow && m.kind !== 'throw' && buffered(f.input, Button.EX, RULES.chordWindow)) {
+    if (chordInstead(sim, f, m, input)) return;
+  }
   // A held beam: the move holds on its beam frame while the button is held.
   if (f.beaming && m.beam) {
     const b = m.beam;
@@ -891,6 +911,27 @@ function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void
   f.moveFrame = next;
   if (next === lastActiveFrame(m) + 1) checkWhiff(sim, f, m);
   applyMoveFrame(sim, f, m, input);
+}
+
+/**
+ * The move that just started (by one button of the chord) becomes the chord
+ * move: what it cost is given back first (the chord may need the meter).
+ */
+function chordInstead(sim: FighterHost, f: FighterState, m: MoveDef, input: InputFrame): boolean {
+  const meter = m.meterCost ?? 0;
+  const stamina = m.stamina ?? RULES.staminaCost[m.kind];
+  f.meter += meter;
+  const cmd = findCommand(sim, f, input, undefined, 1, Button.EX);
+  if (!cmd) {
+    f.meter -= meter;
+    return false;
+  }
+  f.stamina = Math.min(sim.statsOf(f).maxStamina, f.stamina + stamina);
+  consume(f.input, Button.EX);
+  consume(f.input, Button.HEAVY);
+  consume(f.input, Button.SPECIAL);
+  startMove(sim, f, cmd.move);
+  return true;
 }
 
 /**
@@ -955,6 +996,11 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
     consume(f.input, Button.JUMP);
     doJump(sim, f, input, !!jc.high);
     return true;
+  }
+
+  // RMB + E after a strike lands: the chord special, not the next strike of the string.
+  if (isStrike(m) && contact && frame > m.startup && buffered(f.input, Button.EX)) {
+    if (tryCommand(sim, f, input, (n) => n.kind === 'special' || n.kind === 'super', 1, Button.EX)) return true;
   }
 
   if (flows(m) && contact && !f.mashed && frame > lastActiveFrame(m) && frame <= totalFrames(m)) {

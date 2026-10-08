@@ -11,11 +11,11 @@
  *   back + DODGE in the air  one more recoil per jump (uses the air dash).
  *
  * Ricochet:
- *   forward + E     instead of the shoulder rush: a beam that bounces off walls,
+ *   RMB + E         instead of the shoulder rush: a beam that bounces off walls,
  *                   pillars and the floor (3 times), harder with every bounce.
  *                   You aim it yourself; at each bounce it bends a little
  *                   toward an enemy close to its path.
- *   forward + E with a super point (100 ki)  the visor computes the shot: a
+ *   RMB + E with a super point (100 ki)  the visor computes the shot: a
  *                   path to the enemy wherever it stands, however many bounces
  *                   it takes. The hit sets it on fire. No path: the point is
  *                   kept and the plain ricochet comes out instead.
@@ -37,7 +37,7 @@ import { STRIKER_TEMPO } from '../characters/striker';
 import { sweep, tempo } from '../dsl';
 import type { CardDef } from '.';
 
-const { SPECIAL: E, DODGE } = Button;
+const { SPECIAL: E, DODGE, EX } = Button;
 
 const opticHit: HitDef = {
   damage: 55,
@@ -136,7 +136,7 @@ export const opticBlast: CardDef = {
 // ===========================================================================
 // Ricochet
 
-/** Forward + E: a bank shot. Aim it yourself, the bounce helps a little. */
+/** RMB + E: a bank shot. Aim it yourself, the bounce helps a little. */
 const ricochetMove: MoveDef = {
   id: 'ricochet',
   name: 'Ricochet',
@@ -176,7 +176,7 @@ const ricochetMove: MoveDef = {
   ],
 };
 
-/** Forward + E with a super point: the visor computes the bank shot and the beam sets the target on fire. */
+/** RMB + E with a super point: the visor computes the bank shot and the beam sets the target on fire. */
 const ricochetSuper: MoveDef = {
   id: 'ricochet_super',
   name: 'Calculated Ricochet (super)',
@@ -313,11 +313,11 @@ export const ricochet: CardDef = {
   rarity: 'rare',
   color: 0xffb21e,
   lines: [
-    '<kbd>W</kbd>+<kbd>E</kbd> — рикошет вместо тарана: до 3 отскоков, каждый +30% урона. Целишься сам, на отскоке луч чуть доворачивает к врагу',
+    '<kbd>ПКМ</kbd>+<kbd>E</kbd> — рикошет вместо тарана: до 3 отскоков, каждый +30% урона. Целишься сам, на отскоке луч чуть доворачивает к врагу',
     'С очком супера визор сам ведёт луч к врагу, где бы он ни был, и <b>поджигает</b>. Нет пути — очко не тратится',
     '<kbd>ПКМ</kbd> в серии: «Циклон», «Выстрел в упор», «Генный сплайс»',
   ],
-  hint: '<kbd>W</kbd>+<kbd>E</kbd> рикошет · с очком супера — сам наводится',
+  hint: '<kbd>ПКМ</kbd>+<kbd>E</kbd> рикошет · с очком супера — сам наводится',
   flavor: 'Угол падения равен углу отражения.',
   moves: [ricochetMove, ricochetSuper, ...[cycloneKick, pointBlank, geneSplice].map((m) => tempo(m, STRIKER_TEMPO))],
   swap: {
@@ -327,8 +327,8 @@ export const ricochet: CardDef = {
     rising_uppercut: 'gene_splice',
   },
   commands: [
-    { move: 'ricochet_super', button: E, dir: 'forward' },
-    { move: 'ricochet', button: E, dir: 'forward' },
+    { move: 'ricochet_super', button: EX },
+    { move: 'ricochet', button: EX },
   ],
 };
 

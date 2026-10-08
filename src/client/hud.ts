@@ -195,8 +195,8 @@ export class Hud {
       this.ricoEl.innerHTML = !state
         ? ''
         : state.ok
-          ? '<kbd>W</kbd>+<kbd>E</kbd> РИКОШЕТ ГОТОВ — визор видит цель'
-          : '<kbd>W</kbd>+<kbd>E</kbd> нет траектории — очко не потратится';
+          ? '<kbd>ПКМ</kbd>+<kbd>E</kbd> РИКОШЕТ ГОТОВ — визор видит цель'
+          : '<kbd>ПКМ</kbd>+<kbd>E</kbd> нет траектории — очко не потратится';
     }
     if (state?.ok && state.x !== null && state.y !== null) {
       this.ricoMark.style.display = 'block';
@@ -566,11 +566,12 @@ export class Hud {
           .join('') + '<p class="hint"><kbd>C</kbd> — снять карты</p>'
       : '<p class="hint"><kbd>C</kbd> — взять карты героя (Циклоп: оптический выстрел, рикошет, мега-луч)</p>';
     const E = 4;
+    const EX = 1 << 11;
     const H = 2;
     const neutralE = cmd(E, undefined);
-    const fwdE = cmd(E, 'forward');
+    const fwdE = cmd(EX, undefined);
     const backE = cmd(E, 'back');
-    const special = `<kbd>E</kbd> — ${name(neutralE).toLowerCase()}${mark(neutralE)}, <kbd>W</kbd>+<kbd>E</kbd> — ${name(fwdE).toLowerCase()}${mark(fwdE)}, <kbd>S</kbd>+<kbd>E</kbd> — ${name(backE).toLowerCase()} (неуязвимый выход из-под атаки)`;
+    const special = `<kbd>E</kbd> — ${name(neutralE).toLowerCase()}${mark(neutralE)}, <kbd>ПКМ</kbd>+<kbd>E</kbd> вместе — ${name(fwdE).toLowerCase()}${mark(fwdE)}, <kbd>S</kbd>+<kbd>E</kbd> — ${name(backE).toLowerCase()} (неуязвимый выход из-под атаки)`;
     const power = (seq: number): string => {
       const id = cmd(H, undefined, seq);
       return `${name(id)}${mark(id)}`;
@@ -598,7 +599,7 @@ export class Hud {
         <li>Бег (держи <kbd>Shift</kbd>) + <kbd>ЛКМ</kbd> — летящее колено, + <kbd>ПКМ</kbd> — удар с разбега</li>
         <li>Враг лежит перед тобой — любая атака добивает</li>
         <li><kbd>ЛКМ</kbd> + <kbd>ПКМ</kbd> вместе — бросок (пробивает блок)</li>
-        <li>${special}. ${c.moves.mega_beam ? 'Очко ки — держи <kbd>E</kbd>: мега-луч <span class="mlc">карта</span> (в прыжке стреляй вниз — полёт, <kbd>WASD</kbd> рулит)' : 'Полная шкала ки — <kbd>E</kbd> выпускает супер'}${c.moves.ricochet_super ? ', <kbd>W</kbd>+<kbd>E</kbd> — рикошет визора (сам находит цель, поджигает)' : ''}</li>
+        <li>${special}. ${c.moves.mega_beam ? 'Очко ки — держи <kbd>E</kbd>: мега-луч <span class="mlc">карта</span> (в прыжке стреляй вниз — полёт, <kbd>WASD</kbd> рулит)' : 'Полная шкала ки — <kbd>E</kbd> выпускает супер'}${c.moves.ricochet_super ? ', <kbd>ПКМ</kbd>+<kbd>E</kbd> — рикошет визора (сам находит цель, поджигает)' : ''}</li>
         <li>В воздухе: <kbd>ЛКМ</kbd> — серия, <kbd>ПКМ</kbd> — удар вниз, <kbd>S</kbd>+<kbd>ПКМ</kbd> — удар ногой в пике</li>
       </ul>
       <h3>Защита</h3>

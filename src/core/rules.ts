@@ -12,6 +12,14 @@ export const DT = 1 / TICK_RATE;
 export const RULES = {
   /** How long (frames) a button press stays buffered waiting to be used. */
   inputBuffer: 10,
+  /**
+   * RMB + E chord (Button.EX). A press of E waits this many frames for RMB
+   * before it comes out on its own (people never press two buttons in the
+   * very same frame)...
+   */
+  chordGrace: 3,
+  /** ...and a move opened by one of the two can still turn into the chord within this many frames. */
+  chordWindow: 4,
 
   // ---------------------------------------------------------------- movement
   jumpSquat: 4,

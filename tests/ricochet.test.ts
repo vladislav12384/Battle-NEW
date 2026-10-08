@@ -10,8 +10,8 @@ import { B, duel, escaper, Harness, newSim, playSequence } from './helpers';
 
 const RICO = cardCharId('striker', ['ricochet']);
 const BOTH = cardCharId('striker', ['optic_blast', 'ricochet']);
-/** Forward + E. */
-const RICOCHET = { buttons: B.SPECIAL, moveY: 1 };
+/** RMB + E. */
+const RICOCHET = { buttons: B.HEAVY | B.SPECIAL };
 
 /** Shooter at (-9, 0, 0); its enemy right in front of it (1.6 m), guard up toward it. */
 function wallShot(charId = RICO) {
@@ -58,7 +58,7 @@ describe('ricochet geometry', () => {
   });
 });
 
-describe('Cyclops: ricochet (forward + E)', () => {
+describe('Cyclops: ricochet (RMB + E)', () => {
   it('takes the place of the shoulder rush', () => {
     const c = withCards(striker, [CARDS.ricochet]);
     expect(validateCharacter(c)).toEqual([]);
@@ -132,7 +132,7 @@ describe('Cyclops: ricochet (forward + E)', () => {
   });
 });
 
-describe('Cyclops: computed ricochet (forward + E with a super point)', () => {
+describe('Cyclops: computed ricochet (RMB + E with a super point)', () => {
   it('finds the enemy behind a pillar, spends the point and sets it on fire', () => {
     const sim = newSim();
     const a = sim.addFighter({ charId: RICO, team: 0, pos: vec3(-7, 0, -2), yaw: Math.PI });
@@ -294,12 +294,13 @@ describe('Cyclops: the power string with the Ricochet card', () => {
 });
 
 describe('both Cyclops cards', () => {
-  it('play together: beam on E, recoil on back + dash, ricochet on forward + E', () => {
+  it('play together: beam on E, recoil on back + dash, ricochet on RMB + E', () => {
     expect(CHARACTERS[BOTH]).toBeDefined();
     expect(validateCharacter(CHARACTERS[BOTH])).toEqual([]);
     expect(cardCharId('striker', ['ricochet', 'optic_blast'])).toBe(BOTH);
     const { a, h } = duel(5, BOTH);
     h.step({ [a.id]: { buttons: B.SPECIAL } });
+    h.run(RULES.chordGrace);
     expect(a.move).toBe('optic_blast');
     h.run(80);
     h.step({ [a.id]: RICOCHET });
