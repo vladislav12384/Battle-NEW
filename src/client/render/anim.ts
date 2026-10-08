@@ -379,10 +379,16 @@ export function computeTargets(
         const dx = yawC * f.dodgeDirX - yawS * f.dodgeDirZ;
         const dz = -yawS * f.dodgeDirX - yawC * f.dodgeDirZ;
         const k = Math.sin(t * Math.PI);
-        p.roll = dx * 0.45 * k;
-        p.lean = 0.1 + dz * 0.35 * k;
-        p.hipY -= 0.2 * b.s * k;
-        p.hipX = dx * 0.08 * k;
+        // Slip: the body ducks and swings off the line, the feet push off wide.
+        p.roll = dx * 0.5 * k;
+        p.lean = 0.12 + dz * 0.35 * k;
+        p.hipY -= 0.24 * b.s * k;
+        p.hipX = dx * 0.16 * k;
+        p.headPitch += 0.15 * k;
+        p.lFoot = add(p.lFoot, v(dx * 0.12 * k - 0.04 * k, 0, dz * 0.1 * k));
+        p.rFoot = add(p.rFoot, v(dx * 0.12 * k + 0.04 * k, 0, dz * 0.1 * k));
+        p.lHand = add(p.lHand, v(dx * 0.05 * k, -0.04 * k, -0.03 * k));
+        p.rHand = add(p.rHand, v(dx * 0.05 * k, -0.04 * k, -0.03 * k));
         p.stiff.body = 26;
       }
       break;

@@ -209,9 +209,11 @@ describe('free-form combos', () => {
     const { a, h } = duel(1.2);
     playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'up')]);
     const hits = h.of('hit');
-    // 3rd hit (right hook, 34 base) is scaled to 90%, 4th (uppercut, 32) to 80%.
-    expect(hits[2].damage).toBe(Math.round(34 * 0.9));
-    expect(hits[3].damage).toBe(Math.round(32 * 0.8));
+    // 3rd hit (right hook, 34 base) is scaled to 90%, 4th (uppercut, 32) to 80%
+    // (on top of the on-beat rhythm bonus).
+    const beat = (n: number) => 1 + hits[n].rhythm * RULES.rhythm.damage;
+    expect(hits[2].damage).toBe(Math.round(34 * 0.9 * beat(2)));
+    expect(hits[3].damage).toBe(Math.round(32 * 0.8 * beat(3)));
   });
 
   it('juggle points: an airborne victim over the limit can no longer be hit', () => {
@@ -229,9 +231,8 @@ describe('free-form combos', () => {
 
   it('counter hit: hitting an attack in startup deals bonus damage', () => {
     const { a, b, h } = duel(1.3);
-    h.step({ [b.id]: { buttons: B.HEAVY } }); // haymaker startup 14
-    h.run(3, { [b.id]: { buttons: 0 } });
-    h.step({ [a.id]: { buttons: B.LIGHT } });
+    h.step({ [b.id]: { buttons: B.LIGHT, swipe: 'left' } }); // hook, startup 11
+    h.step({ [a.id]: { buttons: B.LIGHT } }); // jab, startup 8: lands first
     h.until(() => h.of('hit').length > 0);
     const hit = h.of('hit')[0];
     expect(hit.attacker).toBe(a.id);

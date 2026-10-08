@@ -14,11 +14,11 @@ import { chainWindowStart } from '../fighter';
 import { Button, type Dir, type InputFrame, neutralInput, type Swipe, swipeCode } from '../input';
 import { chance, nextRandom, type RngState } from '../math/rng';
 import { hDistance, wrapAngle, yawFromDir, yawTo } from '../math/vec3';
-import { chestHeight, moveReach, totalFrames } from '../moves';
+import { chestHeight, moveReach, strikeLine, totalFrames } from '../moves';
 import { RULES } from '../rules';
 import type { Simulation } from '../simulation';
 import type { FighterState } from '../state';
-import type { MoveDef } from '../types';
+import type { MoveDef, StrikeLine } from '../types';
 
 export type BotMode = 'idle' | 'block' | 'parry' | 'dodge' | 'fighter';
 
@@ -40,7 +40,7 @@ export interface BotConfig {
 
 export const DEFAULT_BOT: BotConfig = {
   mode: 'fighter',
-  reaction: 18,
+  reaction: 14,
   aggression: 0.5,
   blockChance: 0.55,
   parryChance: 0.15,
@@ -77,6 +77,11 @@ const PLANS: Record<string, Step[]> = {
   ],
   hammer: [{ button: L }, { button: L }, { button: H, swipe: 'down', onHit: true }, { button: H, swipe: 'up', onHit: true }],
   haymaker: [{ button: H }, { button: H, swipe: 'left', onHit: true }],
+  // Big readable openers: the player can dash through them on reaction.
+  roundhouseR: [{ button: K, swipe: 'left' }, { button: L, onHit: true }, { button: L, swipe: 'up', onHit: true }],
+  roundhouseL: [{ button: K, swipe: 'right' }, { button: L, onHit: true }],
+  axe: [{ button: K, swipe: 'down' }, { button: L, onHit: true }],
+  backfist: [{ button: H, swipe: 'left' }],
   pokeBlast: [{ button: L }, { button: E, onHit: true }],
   teep: [{ button: K }],
   sweep: [{ button: K, dir: 'back' }],
@@ -88,6 +93,15 @@ interface Threat {
   key: string;
   framesToHit: number;
   perceived: boolean;
+  kind: MoveDef['kind'];
+  line: StrikeLine;
+}
+
+/** Stick X (bot faces the attacker) for the dash that slips a strike best. */
+function dashSide(line: StrikeLine, fallback: number): number {
+  if (line === 'fromLeft') return 1; // comes from our left: dash right
+  if (line === 'fromRight') return -1;
+  return fallback;
 }
 
 export class Bot {
@@ -109,6 +123,7 @@ export class Bot {
   private threatKey = '';
   private defense: 'none' | 'block' | 'parry' | 'dodge' = 'none';
   private defenseDone = false;
+  private dodgeLead = 3;
   private blockHold = 0;
   /** Speculative guard: humans can't react to 5-frame jabs, they guard in advance. */
   private guardTimer = 0;
@@ -161,10 +176,11 @@ export class Bot {
         if (chance(this.rng, this.config.parryChance)) taps |= BLOCK;
       }
     } else if (mode === 'dodge') {
+      // Training dummy: a last-moment dash the right way (a perfect dodge).
       if (threat && threat.framesToHit <= 3 && threat.key !== this.threatKey) {
         this.threatKey = threat.key;
         taps |= DODGE;
-        out.moveX = this.strafe;
+        out.moveX = dashSide(threat.line, this.strafe);
         this.strafe = -this.strafe;
       }
     } else if (mode === 'fighter' && target) {
@@ -175,7 +191,7 @@ export class Bot {
 
     // A tapped button must be released first if it is currently down.
     let buttons = held;
-    for (let b = 1; b <= Button.LOCK; b <<= 1) {
+    for (let b = 1; b <= Button.KICK; b <<= 1) {
       if (!(taps & b)) continue;
       if (this.prevButtons & b && !(held & b)) this.pendingTaps |= b;
       else buttons |= b;
@@ -230,6 +246,8 @@ export class Bot {
         key: `${e.id}:${e.move}:${sim.state.frame - e.moveFrame}`,
         framesToHit: Math.max(0, firstHit - e.moveFrame - 1),
         perceived: e.moveFrame >= this.config.reaction,
+        kind: m.kind,
+        line: strikeLine(m),
       };
       if (!best || t.framesToHit < best.framesToHit) best = t;
     }
@@ -241,7 +259,7 @@ export class Bot {
       if (closing <= 0) continue;
       const frames = Math.floor((Math.hypot(dx, dz) / closing) * 60);
       if (frames > 30) continue;
-      const t: Threat = { key: `p${p.id}`, framesToHit: Math.max(0, frames - 2), perceived: true };
+      const t: Threat = { key: `p${p.id}`, framesToHit: Math.max(0, frames - 2), perceived: true, kind: 'special', line: 'straight' };
       if (!best || t.framesToHit < best.framesToHit) best = t;
     }
     return best;
@@ -288,19 +306,23 @@ export class Bot {
     if (threat && threat.key !== this.threatKey && threat.perceived && actionable && this.plan.length === 0) {
       this.threatKey = threat.key;
       this.defenseDone = false;
+      // Slow blows seen coming are dashed through; quick ones are guarded.
+      const dodge = Math.min(0.85, cfg.dodgeChance * (threat.kind === 'light' ? 0.5 : 2.2));
       const r = nextRandom(this.rng);
       if (r < cfg.parryChance) this.defense = 'parry';
-      else if (r < cfg.parryChance + cfg.dodgeChance) this.defense = 'dodge';
-      else if (r < cfg.parryChance + cfg.dodgeChance + cfg.blockChance) this.defense = 'block';
+      else if (r < cfg.parryChance + dodge && !f.exhausted) this.defense = 'dodge';
+      else if (r < cfg.parryChance + dodge + cfg.blockChance) this.defense = 'block';
       else this.defense = 'none';
+      // Dash timing: sometimes right at the last moment (perfect), usually a bit early.
+      this.dodgeLead = chance(this.rng, 0.35) ? 3 + Math.floor(nextRandom(this.rng) * 3) : 6 + Math.floor(nextRandom(this.rng) * 6);
     }
     if (this.defense !== 'none' && threat && threat.key === this.threatKey) {
       if (this.defense === 'parry' && !this.defenseDone && threat.framesToHit <= 2) {
         taps |= BLOCK;
         this.defenseDone = true;
-      } else if (this.defense === 'dodge' && !this.defenseDone && threat.framesToHit <= 3) {
+      } else if (this.defense === 'dodge' && !this.defenseDone && threat.framesToHit <= this.dodgeLead) {
         taps |= DODGE;
-        out.moveX = this.strafe;
+        out.moveX = dashSide(threat.line, this.strafe);
         this.strafe = -this.strafe;
         this.defenseDone = true;
       }
@@ -316,6 +338,11 @@ export class Bot {
       return { held, taps };
     }
     this.defense = 'none';
+
+    // ------------------------------------------------ counter out of a perfect dodge
+    if (f.state === 'dodge' && f.dodgeCounter && this.plan.length === 0) {
+      this.startPlan(chance(this.rng, 0.5) ? 'haymaker' : 'launch');
+    }
 
     // ------------------------------------------------ plan execution
     if (this.plan.length > 0) {
@@ -339,6 +366,7 @@ export class Bot {
     const punishable =
       target.state === 'stagger' ||
       target.state === 'land' ||
+      target.exposed > 0 ||
       (tm !== null && target.moveFrame > tm.startup + tm.active && totalFrames(tm) - target.moveFrame > 10);
 
     if (punishable && dist < 3.2 && f.state === 'ground') {
@@ -381,11 +409,15 @@ export class Bot {
     if (f.meter >= 100 && chance(this.rng, 0.15)) return 'super';
     if (target.state === 'block' && chance(this.rng, 0.45)) return chance(this.rng, 0.5) ? 'grab' : 'sweep';
     const r = nextRandom(this.rng);
-    if (r < 0.22) return 'boxing';
-    if (r < 0.4) return 'mix';
-    if (r < 0.58) return 'launch';
-    if (r < 0.7) return 'hammer';
-    if (r < 0.8) return 'haymaker';
+    if (r < 0.16) return 'boxing';
+    if (r < 0.29) return 'mix';
+    if (r < 0.41) return 'launch';
+    if (r < 0.48) return 'hammer';
+    if (r < 0.57) return 'haymaker';
+    if (r < 0.65) return 'roundhouseR';
+    if (r < 0.71) return 'roundhouseL';
+    if (r < 0.76) return 'axe';
+    if (r < 0.81) return 'backfist';
     if (r < 0.88) return 'grab';
     if (r < 0.94) return 'sweep';
     return 'pokeBlast';
@@ -419,8 +451,8 @@ export class Bot {
       if (f.moveFrame >= window - 2 && (!step.onHit || f.moveHit)) return this.tapStep(step);
       return 0;
     }
-    if (f.state === 'ground' || f.state === 'air' || f.state === 'block') {
-      if (this.waiting) {
+    if (f.state === 'ground' || f.state === 'air' || f.state === 'block' || (f.state === 'dodge' && f.dodgeCounter)) {
+      if (this.waiting && f.state !== 'dodge') {
         // The press didn't come out (string interrupted): give up on this plan.
         this.waiting = false;
         return this.endPlan();

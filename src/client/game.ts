@@ -5,15 +5,16 @@
 import * as THREE from 'three';
 import { CHARACTERS } from '../content';
 import { Bot, type BotMode } from '../core/ai/bot';
+import { chargeRatio } from '../core/combat';
 import { type InputFrame } from '../core/input';
-import { chestHeight, chestPos } from '../core/moves';
-import { vec3, wrapAngle } from '../core/math/vec3';
+import { aimedPoint, chestHeight, chestPos, movePitch, moveReach, strikeLine } from '../core/moves';
+import { hDistance, vec3, wrapAngle, yawFromDir, yawTo } from '../core/math/vec3';
 import { DEFAULT_ARENA } from '../core/physics';
 import { DT, RULES } from '../core/rules';
 import { Simulation } from '../core/simulation';
 import type { FighterState, GameEvent } from '../core/state';
 import { Audio } from './audio';
-import { Hud } from './hud';
+import { Hud, type ThreatMark } from './hud';
 import { InputDevice } from './input';
 import { FighterView, toThree } from './render/fighterView';
 import { Fx } from './render/fx';
@@ -51,7 +52,28 @@ interface ViewEntry {
   joints: Joints | null;
   /** Rendered body yaw (springy for the local player: arms trail quick flicks). */
   yaw: Spring;
+  /** Wind-up glint to draw on the striking limb (enemy tells). */
+  tell: { limb: string; color: number; size: number; heavy: boolean } | null;
+  /** Last dash frame that left an afterimage. */
+  ghostFrame: number;
 }
+
+interface Ghost {
+  group: THREE.Group;
+  mat: THREE.MeshBasicMaterial;
+  t: number;
+  life: number;
+  opacity: number;
+}
+
+const LIMB_JOINT: Record<string, 'lHand' | 'rHand' | 'lFoot' | 'rFoot' | 'chest' | 'head'> = {
+  lHand: 'lHand',
+  rHand: 'rHand',
+  lFoot: 'lFoot',
+  rFoot: 'rFoot',
+  body: 'chest',
+  head: 'head',
+};
 
 const ACTIONABLE = new Set(['ground', 'air', 'block']);
 
@@ -94,8 +116,13 @@ export class Game {
   private lastTarget = -1;
   private adv: { victim: number; kind: string; t: number; a: number; v: number } | null = null;
   private advResult: { value: number; kind: string } | null = null;
-  private kick = { pitch: 0, roll: 0, fov: 0, push: 0 };
+  private kick = { pitch: 0, roll: 0, yaw: 0, fov: 0, push: 0 };
   private demoBot: Bot | null = null;
+  private ghosts: Ghost[] = [];
+  /** Remaining seconds of an anime "impact frame" (inverted picture). */
+  private impactFrame = 0;
+  /** Brief world slow-down (perfect dodge, K.O.): seconds left and speed. */
+  private dilation = { t: 0, scale: 1 };
   /** Debug/tooling hook: drives the local player with a script instead of the devices. */
   scriptedInput: ((tick: number, game: Game) => Partial<InputFrame>) | null = null;
   /** Debug/tooling hook: overrides the camera after it has been placed. */
@@ -103,7 +130,7 @@ export class Game {
   private scriptTick = 0;
 
   constructor(
-    canvas: HTMLCanvasElement,
+    private readonly canvas: HTMLCanvasElement,
     hudRoot: HTMLElement,
     private readonly opts: GameOptions = {},
   ) {
@@ -210,8 +237,9 @@ export class Game {
   frame(dtSeconds: number): void {
     const dt = Math.min(dtSeconds, 0.1);
     this.time += dt;
+    if (this.dilation.t > 0) this.dilation.t -= dt;
     if (!this.paused) {
-      this.acc += dt * (this.settings.slowmo ? 0.25 : 1);
+      this.acc += dt * (this.settings.slowmo ? 0.25 : 1) * (this.dilation.t > 0 ? this.dilation.scale : 1);
       let steps = 0;
       while (this.acc >= DT && steps < 6) {
         this.tick();
@@ -240,6 +268,8 @@ export class Game {
           pose: null,
           joints: null,
           yaw: new Spring(f.yaw),
+          tell: null,
+          ghostFrame: -1,
         };
         e.mem.lastX = f.pos.x;
         e.mem.lastZ = f.pos.z;
@@ -264,6 +294,12 @@ export class Game {
       if (p.lockTarget >= 0) {
         this.input.yaw = p.yaw;
         this.input.pitch = p.aimPitch;
+      } else if (p.state === 'dodge' && p.dodgeOrbit >= 0) {
+        // Circling dash: the view turns with the circle, the enemy stays in front.
+        const t = sim.fighter(p.dodgeOrbit);
+        const pe = this.views.get(p.id);
+        const te = t ? this.views.get(t.id) : undefined;
+        if (t && pe && te) this.input.yaw += wrapAngle(yawTo(p.pos, t.pos) - yawTo(pe.prev, te.prev));
       }
       if (this.settings.infiniteMeter) {
         p.meter = RULES.meterMax;
@@ -364,13 +400,30 @@ export class Game {
           this.kick.push += 0.05 * power;
           this.kick.fov -= Math.min(9, 2 + e.force * 0.5);
           this.kick.pitch -= 0.012 * power;
+          // Rhythm: the crosshair pulses "now", on-beat chains tick higher and higher.
+          hud.beatCue();
+          if (e.rhythm > 0) {
+            hud.rhythm(e.rhythm);
+            sfx.play('beat', 1 + e.rhythm * 0.15);
+          }
+        }
+        // Anime impact frame on the blows that matter.
+        if ((mine && (e.counter || e.hitstop >= 18)) || (e.attacker === me && e.rhythm >= RULES.rhythm.max && heavy)) {
+          this.impactFrame = 0.05;
+          sfx.play('impact', power);
         }
         this.reactToHit(e.victim, e.attacker, e.dir, e.point, Math.min(1.6, e.force / 7 + e.damage / 90 + (e.counter ? 0.3 : 0)));
         if (e.victim === me) {
           hud.hurt(e.damage);
           fx.shake(heavy ? 0.6 : 0.3);
-          this.kick.pitch += heavy ? 0.12 : 0.05;
-          this.kick.roll += (Math.random() - 0.5) * (heavy ? 0.12 : 0.06);
+          // The head snaps the way the blow pushes it.
+          const yaw = this.input.yaw;
+          const side = e.dir.x * Math.cos(yaw) - e.dir.z * Math.sin(yaw);
+          const back = e.dir.x * Math.sin(yaw) + e.dir.z * Math.cos(yaw);
+          const k = heavy ? 1 : 0.45;
+          this.kick.pitch += (0.05 + Math.max(0, back) * 0.1) * k + Math.max(0, e.dir.y) * 0.08;
+          this.kick.roll -= side * 0.14 * k;
+          this.kick.yaw -= side * 0.1 * k;
         } else if (e.attacker === me) {
           fx.shake(heavy ? 0.28 : 0.1);
           if (heavy) this.kick.fov -= 6;
@@ -388,6 +441,7 @@ export class Game {
       }
       case 'block': {
         const at = this.worldPoint(e.point);
+        if (e.attacker === me) hud.beatCue();
         fx.spark(at, { color: 0x66aaff, count: 12, speed: 5, size: 0.08 });
         fx.flash(at, 0x4488ff, 0.8, 0.1);
         sfx.play('block', this.nearCamera(at));
@@ -428,8 +482,14 @@ export class Game {
         const at = this.worldPoint(e.point);
         fx.spark(at, { color: 0xffaa33, count: 20, speed: 6 });
         fx.flash(at, 0xffaa33, 1.2);
-        sfx.play('block', 1.2);
-        if (e.victim === me || e.attacker === me) hud.callout('ARMOR', 'orange');
+        sfx.play(e.poise ? 'poise' : 'block', 1.2);
+        if (e.poise) {
+          // A light strike bounced off a heavy blow's wind-up.
+          if (e.attacker === me) hud.note('НЕ СБИТЬ: тяжёлый удар не прервать лёгким — уходи рывком', 'poise');
+          else if (e.victim === me) hud.note('СТОЙКОСТЬ', 'poise');
+          const av = this.views.get(e.attacker);
+          if (av) impactRecoil(av.mem, 1.2);
+        } else if (e.victim === me || e.attacker === me) hud.callout('ARMOR', 'orange');
         break;
       }
       case 'clash': {
@@ -444,17 +504,58 @@ export class Game {
         }
         break;
       }
-      case 'perfectDodge':
+      case 'perfectDodge': {
+        const v = this.views.get(e.fighter);
+        if (v && (e.fighter !== me || this.settings.thirdPerson)) this.spawnGhost(v, 0x66e0ff, 0.7, 0.6);
         if (e.fighter === me) {
-          hud.callout('PERFECT DODGE', 'cyan');
-          hud.flash('rgba(120,160,255,1)', 0.2);
+          hud.callout('ИДЕАЛЬНЫЙ УКЛОН', 'cyan');
+          hud.note('контратакуй — враг замедлен', 'perfect');
+          hud.flash('rgba(120,160,255,1)', 0.25);
+          sfx.play('perfect');
+          this.dilation = { t: 0.3, scale: 0.35 };
+        } else if (e.attacker === me) {
+          hud.callout('ТЕБЯ ОБОШЛИ', 'red');
+          sfx.play('perfect', 0.6);
+        }
+        break;
+      }
+      case 'evade': {
+        const f = this.sim.fighter(e.fighter);
+        if (f) sfx.play('dodge', this.nearCamera(f.pos) * 1.2);
+        if (e.fighter === me) hud.note('уклон', 'good');
+        break;
+      }
+      case 'mash':
+        if (e.fighter === me) {
+          hud.mash();
+          sfx.play('mash');
         }
         break;
       case 'attack': {
         const f = this.sim.fighter(e.fighter);
         const m = f ? this.sim.moveById(f.charId, e.move) : null;
         if (f) sfx.play(m && m.kind !== 'light' ? 'whooshHeavy' : 'whoosh', this.nearCamera(f.pos) * 0.8);
-        if (e.fighter === me && m) hud.strike(m.name, this.input.lastSwipe.swipe);
+        if (e.fighter === me && m) {
+          hud.strike(m.name, this.input.lastSwipe.swipe);
+          if (f && f.rhythm === 0) hud.rhythm(0);
+        }
+        // Enemy tell: a glint on the striking limb as the wind-up starts.
+        const pl = this.player;
+        const box = m?.hitboxes.find((x) => !x.throw);
+        if (f && m && box && pl && f.team !== pl.team) {
+          const unblockable = !!box.hit.unblockable || !!box.hit.guardBreak;
+          const heavy = m.kind !== 'light';
+          const v = this.views.get(f.id);
+          if (v) {
+            v.tell = {
+              limb: box.limb ?? 'rHand',
+              color: unblockable ? 0xff3b3b : heavy ? 0xff9a3c : 0xdff3ff,
+              size: heavy ? 1.1 : 0.45,
+              heavy,
+            };
+          }
+          if (heavy && hDistance(f.pos, pl.pos) < 7) sfx.play(unblockable ? 'tellHeavy' : 'tell', this.nearCamera(f.pos));
+        }
         break;
       }
       case 'whiff': {
@@ -542,6 +643,8 @@ export class Game {
         break;
       case 'ko':
         sfx.play('ko');
+        this.impactFrame = 0.06;
+        this.dilation = { t: 0.6, scale: 0.3 };
         hud.callout(e.fighter === me ? 'YOU WERE K.O.' : 'K.O.', 'red big');
         fx.shake(0.6);
         break;
@@ -625,6 +728,18 @@ export class Game {
           this.fx.trailSample(`${f.id}:${limb}`, base, tip, color);
         }
       }
+      if (e.tell) {
+        // Wind-up glint on the limb that is about to strike.
+        const at = e.view.root.localToWorld(toThree(joints[LIMB_JOINT[e.tell.limb] ?? 'rHand']));
+        this.fx.flash(at, e.tell.color, e.tell.size, e.tell.heavy ? 0.28 : 0.14);
+        if (e.tell.heavy) this.fx.ring(at, e.tell.color, 0.9, 0.3);
+        e.tell = null;
+      }
+      // Dash afterimages (not for our own first-person body).
+      if (f.state === 'dodge' && !fp && (f.stateFrame === 1 || f.stateFrame === 5 || f.stateFrame === 9) && e.ghostFrame !== f.stateFrame) {
+        e.ghostFrame = f.stateFrame;
+        this.spawnGhost(e, f.team === 0 ? 0x7fb8ff : 0xff9966, 0.32, 0.3);
+      } else if (f.state !== 'dodge') e.ghostFrame = -1;
       if (isMe) {
         headWorld = e.view.root.localToWorld(toThree(joints.head));
         meJoints = joints;
@@ -637,12 +752,31 @@ export class Game {
       }
     }
 
+    for (let i = this.ghosts.length - 1; i >= 0; i--) {
+      const g = this.ghosts[i];
+      g.t -= dt;
+      g.mat.opacity = Math.max(0, g.opacity * (g.t / g.life));
+      if (g.t <= 0) {
+        g.group.removeFromParent();
+        g.mat.dispose();
+        this.ghosts.splice(i, 1);
+      }
+    }
+
     this.world.syncProjectiles(sim, frac);
     this.world.drawDebug(sim, this.settings.hitboxes, firstPerson ? this.playerId : -1);
     const shake = this.fx.update(dt);
     this.updateCamera(me, headWorld, meJoints, shake, dt);
     this.cameraOverride?.(this.world.camera, this);
+    this.hud.threats(me && me.state !== 'ko' ? this.computeThreats(me) : []);
     this.hud.updateEffects(dt, (p) => this.project(p), !!me?.exhausted);
+    // Slowed-time tint while an enemy we perfect-dodged is exposed.
+    let exposed = 0;
+    for (const f of sim.state.fighters) if (me && f.team !== me.team) exposed = Math.max(exposed, f.exposed);
+    this.hud.witch(Math.min(1, exposed / RULES.dodge.exposeFrames) * 0.85);
+    // Anime impact frame: an inverted, high-contrast flash of the picture.
+    this.impactFrame = Math.max(0, this.impactFrame - dt);
+    this.canvas.style.filter = this.impactFrame > 0 ? 'invert(1) grayscale(1) contrast(1.8)' : '';
 
     // Lock-on marker and HUD target.
     const lock = me && me.lockTarget >= 0 ? sim.fighter(me.lockTarget) : undefined;
@@ -667,6 +801,67 @@ export class Game {
     this.world.render();
   }
 
+  private spawnGhost(e: ViewEntry, color: number, opacity: number, life: number): void {
+    const g = e.view.ghost(color, opacity);
+    this.world.scene.add(g.group);
+    this.ghosts.push({ ...g, t: life, life, opacity });
+  }
+
+  /**
+   * Incoming strikes aimed at the player: which side they come from, how
+   * heavy, how close to impact, and where the attacker is if off-screen.
+   */
+  private computeThreats(me: FighterState): ThreatMark[] {
+    const sim = this.sim;
+    const cam = this.world.camera;
+    const inv = cam.matrixWorldInverse;
+    const out: ThreatMark[] = [];
+    for (const e of sim.state.fighters) {
+      if (e.team === me.team || e.state !== 'attack') continue;
+      const m = sim.moveOf(e);
+      const boxes = m ? m.hitboxes.filter((x) => !x.throw) : [];
+      if (!m || boxes.length === 0) continue;
+      const first = Math.min(...boxes.map((x) => x.frames[0]));
+      if (e.moveFrame >= first) continue;
+      const rush = m.motion?.some((x) => (x.fwd ?? 0) > 4) ? 3 : 0;
+      if (hDistance(e.pos, me.pos) > moveReach(m) + (m.lunge ?? RULES.defaultLunge[m.kind]) + 1 + rush) continue;
+      const toMe = Math.abs(wrapAngle(yawFromDir(me.pos.x - e.pos.x, me.pos.z - e.pos.z) - e.yaw));
+      if (toMe > 0.7 && e.moveTarget !== me.id) continue;
+      const box = boxes[0];
+      const full = !!m.charge?.fullHit?.unblockable && chargeRatio(e, m) >= 1;
+      const kind: ThreatMark['kind'] =
+        box.hit.unblockable || box.hit.guardBreak || full ? 'unblockable' : m.kind === 'light' ? 'light' : 'heavy';
+      const line = strikeLine(m);
+      let from: ThreatMark['from'] = 'center';
+      if (line === 'fromLeft' || line === 'fromRight') {
+        // Which side of OUR view the swing starts on.
+        const stats = sim.statsOf(e);
+        const pitch = movePitch(e, m);
+        const a = aimedPoint(e, stats, box.a, pitch);
+        const b = aimedPoint(e, stats, box.b ?? box.a, pitch);
+        const ca = new THREE.Vector3(a.x, a.y, a.z).applyMatrix4(inv);
+        const cb = new THREE.Vector3(b.x, b.y, b.z).applyMatrix4(inv);
+        from = ca.x < cb.x ? 'left' : 'right';
+      } else if (line === 'overhead') from = 'top';
+      else if (line === 'low' || line === 'rising') from = 'bottom';
+      const c = chestPos(e, sim.statsOf(e));
+      const cv = new THREE.Vector3(c.x, c.y, c.z).applyMatrix4(inv);
+      const ndc = new THREE.Vector3(c.x, c.y, c.z).project(cam);
+      let edge: number | null = null;
+      if (cv.z > 0) edge = Math.abs(cv.x) < 0.3 ? Math.PI / 2 : cv.x > 0 ? 0.3 : Math.PI - 0.3;
+      else if (Math.abs(ndc.x) > 0.95 || Math.abs(ndc.y) > 0.95) edge = Math.atan2(-ndc.y, ndc.x);
+      const framesToHit = first - e.moveFrame;
+      out.push({
+        from,
+        kind,
+        progress: Math.min(1, e.moveFrame / Math.max(1, first - 1)),
+        now: framesToHit >= 2 && framesToHit <= RULES.dodge.invulnStart + RULES.dodge.perfectWindow,
+        edge,
+      });
+    }
+    return out;
+  }
+
   private updateCamera(
     me: FighterState | undefined,
     head: THREE.Vector3 | null,
@@ -678,6 +873,7 @@ export class Game {
     const decay = Math.exp(-dt * 8);
     this.kick.pitch *= decay;
     this.kick.roll *= decay;
+    this.kick.yaw *= decay;
     this.kick.fov *= Math.exp(-dt * 6);
     this.kick.push *= Math.exp(-dt * 10);
     cam.fov = 90 + this.kick.fov;
@@ -707,7 +903,7 @@ export class Game {
     cam.position.y += 0.06;
     cam.rotation.set(
       pitch + this.kick.pitch + shake.y - (hr.pitch - REST_HEAD.pitch) * 0.55,
-      yaw + shake.x + (hr.yaw - REST_HEAD.yaw) * 0.18,
+      yaw + shake.x + this.kick.yaw + (hr.yaw - REST_HEAD.yaw) * 0.18,
       this.kick.roll + shake.roll - (hr.roll - REST_HEAD.roll) * 0.45,
     );
   }

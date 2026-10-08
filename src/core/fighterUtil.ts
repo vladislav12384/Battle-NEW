@@ -1,10 +1,10 @@
 /** Small shared helpers for fighter state, used by both the state machine and hit resolution. */
 import { createInputBuffer, neutralInput } from './input';
-import { inFrames } from './moves';
-import { clone, hDistance, wrapAngle, yawFromDir, type Vec3, vec3 } from './math/vec3';
+import { inFrames, strikeLine } from './moves';
+import { clone, hDistance, rightFromYaw, wrapAngle, yawFromDir, type Vec3, vec3 } from './math/vec3';
 import { RULES } from './rules';
 import type { ComboState, FighterState, StateId } from './state';
-import type { CharacterStats, MoveDef } from './types';
+import type { CharacterStats, MoveDef, StrikeLine } from './types';
 
 /** The subset of the Simulation API that combat code needs (avoids import cycles). */
 export interface SimContext {
@@ -67,6 +67,11 @@ export function createFighterState(
     chargeFrames: 0,
     extraRecovery: 0,
     armorLeft: 0,
+    moveAbsorbed: false,
+    mashed: false,
+    onBeat: false,
+    rhythm: 0,
+    exposed: 0,
     lungeLeft: 0,
     hitstop: 0,
     shake: 0,
@@ -88,6 +93,9 @@ export function createFighterState(
     dodgeChainTimer: 0,
     perfectDodged: false,
     dodgeCounter: false,
+    dodgeOrbit: -1,
+    dodgeRadius: 0,
+    dodgeSpeed: 1,
     lastHand: '',
     handTimer: 0,
     airJumpsLeft: stats.airJumps,
@@ -121,6 +129,10 @@ export function enterState(f: FighterState, s: StateId, stun = 0): void {
     f.chargeFrames = 0;
     f.armorLeft = 0;
     f.extraRecovery = 0;
+    f.moveAbsorbed = false;
+    f.mashed = false;
+    f.onBeat = false;
+    f.rhythm = 0;
   }
   if (s !== 'ground') f.running = false;
 }
@@ -158,6 +170,44 @@ export type Invuln = 'none' | 'strike' | 'throw' | 'all';
 
 export function dodgeInvulnStart(f: FighterState): number {
   return f.dodgeAir ? RULES.airDodge.invulnStart : RULES.dodge.invulnStart;
+}
+
+export type DodgeSide = 'left' | 'right' | 'back' | 'forward';
+
+/** Which way a dodging fighter is dashing, from its own point of view facing `from`. */
+export function dodgeSide(f: FighterState, from: Vec3): DodgeSide {
+  const dx = from.x - f.pos.x;
+  const dz = from.z - f.pos.z;
+  const d = Math.hypot(dx, dz) || 1;
+  const toX = dx / d;
+  const toZ = dz / d;
+  const rt = rightFromYaw(yawFromDir(toX, toZ));
+  const lateral = f.dodgeDirX * rt.x + f.dodgeDirZ * rt.z;
+  if (Math.abs(lateral) >= 0.5) return lateral > 0 ? 'right' : 'left';
+  return f.dodgeDirX * toX + f.dodgeDirZ * toZ > 0 ? 'forward' : 'back';
+}
+
+/** Evasion window bonus for dashing `side` against a strike travelling along `line`. */
+export function dodgeSideBonus(line: StrikeLine, side: DodgeSide): number {
+  const D = RULES.dodge;
+  if (side === 'forward') return D.forward;
+  if (side === 'back') return line === 'low' ? 0 : D.back;
+  if (line === 'fromLeft') return side === 'right' ? D.goodSide : D.badSide;
+  if (line === 'fromRight') return side === 'left' ? D.goodSide : D.badSide;
+  if (line === 'overhead') return D.overheadSide;
+  return 0;
+}
+
+/**
+ * How many frames (from invulnStart) a dash started by `f` keeps it out of
+ * `m` thrown from `from`: long against slow heavy blows, short against jabs,
+ * longer when dashing the right way (see StrikeLine).
+ */
+export function dodgeWindow(f: FighterState, m: MoveDef | null, from: Vec3): number {
+  const D = RULES.dodge;
+  const base = D.window[m?.kind ?? 'special'];
+  const bonus = dodgeSideBonus(m ? strikeLine(m) : 'straight', dodgeSide(f, from));
+  return Math.max(D.minWindow, base + bonus - f.dodgeChain * D.chainPenalty);
 }
 
 /** What the fighter is currently immune to. */

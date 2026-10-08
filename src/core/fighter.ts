@@ -24,6 +24,7 @@ import {
   approach,
   approachAngle,
   clamp,
+  DEG,
   distance,
   hDistance,
   localDirToWorld,
@@ -36,7 +37,7 @@ import {
   rightFromYaw,
   clone,
 } from './math/vec3';
-import { chestHeight, chestPos, inFrames, lastActiveFrame, moveReach, totalFrames } from './moves';
+import { armorOf, chestHeight, chestPos, inFrames, lastActiveFrame, moveReach, totalFrames } from './moves';
 import { accelerateTo, applyFriction, type WallContact } from './physics';
 import { type ProjectileHost, spawnProjectile } from './projectiles';
 import { DT, RULES } from './rules';
@@ -52,20 +53,46 @@ export interface FighterHost extends ProjectileHost {
 // ==========================================================================
 // Entry points
 
+const STRIKE_BUTTONS = Button.LIGHT | Button.HEAVY | Button.KICK;
+
 export function updateFighter(sim: FighterHost, f: FighterState, input: InputFrame): void {
   const frozen = f.hitstop > 0;
+  const fresh = input.buttons & ~f.input.prevButtons & STRIKE_BUTTONS;
   feedInputFrame(f, input, frozen);
+  if (fresh && f.state === 'attack') judgePress(sim, f, fresh);
   if (f.shake > 0) f.shake--;
   if (frozen) {
     f.hitstop--;
     return;
   }
+  // Exposed by a perfect dodge: the overextended attacker acts at half speed.
+  if (f.exposed > 0 && f.exposed-- % 2 === 1) return;
   tickTimers(f);
   // Exhausted fighters strike slowly: every Nth frame of an attack is lost.
   if (f.exhausted && f.state === 'attack' && ++f.slowAccum % RULES.stamina.exhaustedSlowEvery === 0) return;
   f.stateFrame++;
   updateLock(sim, f);
   runState(sim, f, input);
+}
+
+/**
+ * Rhythm, not mashing: a strike press during another strike's wind-up (the
+ * blow hasn't even come out) locks that strike's chain. A press on impact or
+ * right after it is "on beat" and builds rhythm.
+ */
+function judgePress(sim: FighterHost, f: FighterState, buttons: number): void {
+  const m = sim.moveOf(f);
+  if (!m || !flows(m) || f.charging) return;
+  const contact = f.moveHit || f.moveBlocked;
+  if (!contact && f.moveFrame <= m.startup) {
+    for (const b of [Button.LIGHT, Button.HEAVY, Button.KICK]) if (buttons & b) consume(f.input, b);
+    if (!f.mashed) {
+      f.mashed = true;
+      sim.emit({ type: 'mash', fighter: f.id });
+    }
+    return;
+  }
+  if (contact && f.moveFrame <= lastActiveFrame(m) + RULES.beatWindow) f.onBeat = true;
 }
 
 function feedInputFrame(f: FighterState, input: InputFrame, frozen: boolean): void {
@@ -597,18 +624,51 @@ function startDodge(sim: FighterHost, f: FighterState, input: InputFrame): void 
   f.dodgeDirZ = w.z;
   f.perfectDodged = false;
   f.dodgeCounter = false;
+  // A side dash next to an enemy circles around it: you slip past the strike
+  // and stay in range to answer, instead of drifting out of the fight.
+  f.dodgeOrbit = -1;
+  const side = stickDir(input);
+  f.dodgeSpeed = !air && (side === 'back' || side === 'neutral') ? RULES.dodge.backSpeed : 1;
+  if (!air && (side === 'left' || side === 'right')) {
+    const t = lockedTarget(sim, f) ?? bestTarget(sim, f, f.yaw, RULES.dodge.orbitRange, 75 * DEG, 0);
+    if (t && hDistance(t.pos, f.pos) <= RULES.dodge.orbitRange) {
+      f.dodgeOrbit = t.id;
+      f.dodgeRadius = clamp(hDistance(t.pos, f.pos), 1.1, RULES.dodge.orbitRange);
+    }
+  }
   enterState(f, 'dodge');
-  dodgeVelocity(f);
+  dodgeVelocity(sim, f);
   sim.emit({ type: 'dodge', fighter: f.id });
 }
 
-function dodgeVelocity(f: FighterState): void {
+function dodgeVelocity(sim: FighterHost, f: FighterState): void {
   const D = f.dodgeAir ? RULES.airDodge : RULES.dodge;
   const fr = f.stateFrame;
   const fast = f.dodgeInvulnEnd + 2;
   let speed: number;
   if (fr <= fast) speed = D.speed * (1 - (0.45 * Math.max(0, fr - 1)) / fast);
   else speed = D.speed * 0.55 * Math.max(0, 1 - (fr - fast) / Math.max(1, D.frames - fast));
+  speed *= f.dodgeSpeed;
+  const t = f.dodgeOrbit >= 0 ? sim.fighter(f.dodgeOrbit) : undefined;
+  if (t && t.state !== 'ko') {
+    // Tangent around the enemy (same turning sense as the dash so far),
+    // plus a pull that keeps the circling radius.
+    const rx = f.pos.x - t.pos.x;
+    const rz = f.pos.z - t.pos.z;
+    const d = Math.hypot(rx, rz) || 1;
+    let tx = -rz / d;
+    let tz = rx / d;
+    if (tx * f.dodgeDirX + tz * f.dodgeDirZ < 0) {
+      tx = -tx;
+      tz = -tz;
+    }
+    f.dodgeDirX = tx;
+    f.dodgeDirZ = tz;
+    const pull = (f.dodgeRadius - d) * 8;
+    f.vel.x = tx * speed + (rx / d) * pull;
+    f.vel.z = tz * speed + (rz / d) * pull;
+    return;
+  }
   f.vel.x = f.dodgeDirX * speed;
   f.vel.z = f.dodgeDirZ * speed;
   if (f.dodgeAir && fr <= f.dodgeInvulnEnd) f.vel.y = 0;
@@ -619,7 +679,7 @@ function stateDodge(sim: FighterHost, f: FighterState, input: InputFrame): void 
   faceFree(sim, f, input);
   // Perfect dodge reward: counter-attack straight out of the dodge.
   if (f.dodgeCounter && tryCommand(sim, f, input)) return;
-  dodgeVelocity(f);
+  dodgeVelocity(sim, f);
   if (f.stateFrame >= D.frames) {
     const sprint = !f.dodgeAir && isHeld(f.input, Button.DODGE) && Math.hypot(input.moveX, input.moveY) > 0.3;
     toNeutral(sim, f, input);
@@ -641,9 +701,13 @@ export function startMove(sim: FighterHost, f: FighterState, id: string): void {
   f.registry = [];
   f.chargeFrames = 0;
   f.charging = false;
-  f.armorLeft = m.armor?.hits ?? 0;
+  f.armorLeft = armorOf(m)?.hits ?? 0;
   f.extraRecovery = 0;
   f.slowAccum = 0;
+  f.moveAbsorbed = false;
+  f.mashed = false;
+  f.onBeat = false;
+  f.rhythm = 0;
   f.meter -= m.meterCost ?? 0;
   spendStamina(sim, f, m.stamina ?? RULES.staminaCost[m.kind]);
   if (m.hand) {
@@ -727,7 +791,7 @@ function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void
  * time, stamina and position.
  */
 function checkWhiff(sim: FighterHost, f: FighterState, m: MoveDef): void {
-  if (m.hitboxes.length === 0 || f.moveHit || f.moveBlocked || f.registry.length > 0) return;
+  if (m.hitboxes.length === 0 || f.moveHit || f.moveBlocked || f.moveAbsorbed) return;
   f.extraRecovery = m.whiffPenalty ?? RULES.whiffPenalty[m.kind];
   if (f.extraRecovery <= 0) return;
   if (f.grounded) {
@@ -755,8 +819,9 @@ function finishMove(sim: FighterHost, f: FighterState, m: MoveDef, input: InputF
  *   1. explicit routes (special strings)
  *   2. jump cancel (launchers)
  *   3. FLOW: light/heavy strikes chain freely into any strike right after
- *      their active frames (lights also on whiff, a bit later). Which strike
- *      comes next is entirely the player's choice: button + look flick + stick.
+ *      their active frames, on contact only, and not if the player mashed
+ *      during the wind-up. Which strike comes next is entirely the player's
+ *      choice: button + look flick + stick. On-beat chains build rhythm.
  *   4. system cancels: normal -> special/super on contact, special -> super on hit
  *   5. ki cancel: spend meter to cancel anything into a dodge
  */
@@ -784,8 +849,12 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
     return true;
   }
 
-  if (flows(m) && contact && frame > lastActiveFrame(m) && frame <= totalFrames(m)) {
-    if (tryCommand(sim, f, input, isStrike)) return true;
+  if (flows(m) && contact && !f.mashed && frame > lastActiveFrame(m) && frame <= totalFrames(m)) {
+    const rhythm = f.onBeat ? Math.min(RULES.rhythm.max, f.rhythm + 1) : 0;
+    if (tryCommand(sim, f, input, isStrike)) {
+      f.rhythm = rhythm;
+      return true;
+    }
   }
 
   if (frame > m.startup) {

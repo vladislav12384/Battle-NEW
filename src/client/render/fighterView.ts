@@ -135,6 +135,29 @@ export class FighterView {
     this.root.add(this.aura);
   }
 
+  /** A translucent snapshot of the current pose (dash afterimages). */
+  ghost(color: number, opacity: number): { group: THREE.Group; mat: THREE.MeshBasicMaterial } {
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const group = new THREE.Group();
+    for (const child of this.root.children) {
+      if (!(child instanceof THREE.Mesh) || !child.visible || child === this.aura) continue;
+      const m = new THREE.Mesh(child.geometry, mat);
+      m.position.copy(child.position);
+      m.quaternion.copy(child.quaternion);
+      m.scale.copy(child.scale);
+      group.add(m);
+    }
+    group.position.copy(this.root.position);
+    group.quaternion.copy(this.root.quaternion);
+    return { group, mat };
+  }
+
   /** Brief white flash when hit. */
   hitFlash(): void {
     this.flashT = 1;

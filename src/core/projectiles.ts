@@ -120,8 +120,9 @@ export function processProjectileHits(sim: ProjectileHost): void {
         source: 'projectile',
         projectile: p,
       });
-      if (res === 'whiff' || res === 'parry') continue; // dodged, or reflected back
+      if (res === 'whiff' || res === 'parry') continue; // passed through, or reflected back
       p.registry.push(v.id);
+      if (res === 'evade') continue; // dashed out of it: it flies on
       p.hitsLeft--;
       if (p.hitsLeft <= 0) dead.add(p.id);
     }

@@ -3,7 +3,7 @@ import type { Capsule } from './math/geometry';
 import { clamp, DEG, forwardFromYaw, localToWorld, type Vec3, vec3, type Vec3Tuple } from './math/vec3';
 import { RULES } from './rules';
 import type { FighterState } from './state';
-import type { CharacterStats, HitboxDef, MoveDef } from './types';
+import type { ArmorDef, CharacterStats, HitboxDef, MoveDef, StrikeLine } from './types';
 
 export const totalFrames = (m: MoveDef): number => m.startup + m.active + m.recovery;
 export const firstActiveFrame = (m: MoveDef): number => m.startup + 1;
@@ -22,6 +22,59 @@ export const inFrames = (range: readonly [number, number], frame: number): boole
 
 export function activeHitboxes(m: MoveDef, frame: number): HitboxDef[] {
   return m.hitboxes.filter((h) => inFrames(h.frames, frame));
+}
+
+const lineCache = new WeakMap<MoveDef, StrikeLine>();
+
+/**
+ * Trajectory of a strike as seen by its target (see StrikeLine), derived
+ * from the sweep of its first hitbox in the attacker's local frame
+ * (x right, y up, z forward) unless the move states it.
+ */
+export function strikeLine(m: MoveDef): StrikeLine {
+  if (m.line) return m.line;
+  let line = lineCache.get(m);
+  if (line === undefined) {
+    const h = m.hitboxes.find((x) => !x.throw);
+    const b = h?.b ?? h?.a;
+    if (!h || !b) line = 'straight';
+    else {
+      const dx = b[0] - h.a[0];
+      const dy = b[1] - h.a[1];
+      if (Math.max(h.a[1], b[1]) < 0.6) line = 'low';
+      // Sweeping toward the attacker's left = coming from the target's left.
+      else if (Math.abs(dx) >= 0.4 && Math.abs(dx) >= Math.abs(dy)) line = dx < 0 ? 'fromLeft' : 'fromRight';
+      else if (dy <= -0.6) line = 'overhead';
+      else if (dy >= 0.5) line = 'rising';
+      else line = 'straight';
+    }
+    lineCache.set(m, line);
+  }
+  return line;
+}
+
+const armorCache = new WeakMap<MoveDef, ArmorDef | null>();
+
+/**
+ * The move's armor: explicit armor, or the default poise of heavy blows
+ * (light strikes can't interrupt their late wind-up and active frames).
+ */
+export function armorOf(m: MoveDef): ArmorDef | null {
+  if (m.armor) return m.armor;
+  let a = armorCache.get(m);
+  if (a === undefined) {
+    a =
+      m.kind === 'heavy' && m.poise !== false
+        ? {
+            frames: [Math.max(1, Math.ceil(m.startup * RULES.poise.from)), lastActiveFrame(m)],
+            hits: 1,
+            damageTaken: RULES.poise.damageTaken,
+            vs: 'light',
+          }
+        : null;
+    armorCache.set(m, a);
+  }
+  return a;
 }
 
 const reachCache = new WeakMap<MoveDef, number>();

@@ -18,6 +18,28 @@ export type LimbId = 'lHand' | 'rHand' | 'lFoot' | 'rFoot' | 'body' | 'head';
 export type MoveKind = 'light' | 'heavy' | 'special' | 'super' | 'throw';
 export type HitEffect = 'light' | 'medium' | 'heavy' | 'launch' | 'spike' | 'energy' | 'throw' | 'burst';
 
+/**
+ * How a strike travels, seen by the one it is aimed at. Decides which way it
+ * is easiest to dash out of it: a swing that comes from your left is dodged
+ * by dashing right (away from where it comes from, past where it ends).
+ *   straight  - jab, cross, teep, knee: either side works
+ *   fromLeft / fromRight - hooks, roundhouses, backfists
+ *   overhead  - hammer fists, axe kicks: easy to sidestep
+ *   rising    - uppercuts, launchers
+ *   low       - sweeps
+ */
+export type StrikeLine = 'straight' | 'fromLeft' | 'fromRight' | 'overhead' | 'rising' | 'low';
+
+/** Super armor / poise: hits during these frames hurt but don't interrupt the move. */
+export interface ArmorDef {
+  frames: [number, number];
+  hits: number;
+  /** Fraction of the damage still taken (default 0.5). */
+  damageTaken?: number;
+  /** 'light' = only shrugs off light strikes (poise of heavy blows). Default 'all'. */
+  vs?: 'light' | 'all';
+}
+
 /** Velocity (m/s) given to the victim, in the attacker's frame. */
 export interface KnockbackDef {
   fwd: number;
@@ -187,7 +209,14 @@ export interface MoveDef {
   /** Whether hitboxes follow the vertical aim (default true). */
   pitchAim?: boolean;
   invuln?: InvulnDef[];
-  armor?: { frames: [number, number]; hits: number; damageTaken?: number };
+  armor?: ArmorDef;
+  /**
+   * Heavy blows have poise by default: during the late wind-up a light strike
+   * can't interrupt them (RULES.poise). false turns it off.
+   */
+  poise?: boolean;
+  /** Strike trajectory; derived from the first hitbox when omitted (see strikeLine). */
+  line?: StrikeLine;
   cancels?: CancelDef[];
   jumpCancel?: { frames: [number, number]; on: 'hit' | 'contact'; high?: boolean };
   meterCost?: number;

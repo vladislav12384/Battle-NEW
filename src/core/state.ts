@@ -99,6 +99,16 @@ export interface FighterState {
   /** Extra recovery added to the current move (whiff penalty). */
   extraRecovery: number;
   armorLeft: number;
+  /** The current strike bounced off an armored / poised opponent (no chain, no whiff). */
+  moveAbsorbed: boolean;
+  /** A strike button was mashed during this strike's wind-up: it can't chain. */
+  mashed: boolean;
+  /** The chain press for the next strike came right on impact. */
+  onBeat: boolean;
+  /** Consecutive on-beat chains (0..RULES.rhythm.max): extra damage and weight. */
+  rhythm: number;
+  /** Left exposed by a perfect dodge: acts at half speed while > 0. */
+  exposed: number;
   lungeLeft: number;
 
   /** Freeze frames remaining (hit stop). */
@@ -131,6 +141,11 @@ export interface FighterState {
   perfectDodged: boolean;
   /** Perfect-dodge reward: dodge recovery can be cancelled into attacks. */
   dodgeCounter: boolean;
+  /** Side dash circling around this enemy (-1 = straight dash). */
+  dodgeOrbit: number;
+  dodgeRadius: number;
+  /** Speed multiplier of the current dash (backsteps are shorter). */
+  dodgeSpeed: number;
 
   /** Hand of the last hand strike, for alternating jab/cross ('' = reset). */
   lastHand: '' | 'left' | 'right';
@@ -211,13 +226,17 @@ export type GameEvent =
       force: number;
       /** Move that landed the hit (null for throws/burst without a move). */
       move: string | null;
+      /** Attacker's rhythm level when the hit landed (on-beat chains). */
+      rhythm: number;
     }
   | { type: 'block'; attacker: number; victim: number; chip: number; stamina: number; point: Vec3 }
   | { type: 'parry'; attacker: number; victim: number; point: Vec3 }
   | { type: 'guardBreak'; attacker: number; victim: number; point: Vec3 }
-  | { type: 'armor'; attacker: number; victim: number; damage: number; point: Vec3 }
+  | { type: 'armor'; attacker: number; victim: number; damage: number; point: Vec3; poise: boolean }
   | { type: 'clash'; a: number; b: number; point: Vec3 }
   | { type: 'perfectDodge'; fighter: number; attacker: number }
+  | { type: 'evade'; fighter: number; attacker: number; point: Vec3 }
+  | { type: 'mash'; fighter: number }
   | { type: 'attack'; fighter: number; move: string }
   | { type: 'super'; fighter: number; move: string }
   | { type: 'kiCancel'; fighter: number }

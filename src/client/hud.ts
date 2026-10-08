@@ -67,6 +67,25 @@ class FighterPanel {
   }
 }
 
+/** An incoming strike aimed at the player, drawn around the crosshair. */
+export interface ThreatMark {
+  /** Side of the screen the blow comes from (center = straight at you). */
+  from: 'left' | 'right' | 'top' | 'bottom' | 'center';
+  kind: 'light' | 'heavy' | 'unblockable';
+  /** 0 at the start of the wind-up, 1 at impact. */
+  progress: number;
+  /** Inside the perfect-dodge moment right now. */
+  now: boolean;
+  /** Direction (screen radians) to an attacker outside the view, else null. */
+  edge: number | null;
+}
+
+const THREAT_COLOR: Record<ThreatMark['kind'], [number, number, number]> = {
+  light: [226, 243, 255],
+  heavy: [255, 154, 60],
+  unblockable: [255, 59, 59],
+};
+
 export interface TrainingInfo {
   dummyMode: string;
   hitboxes: boolean;
@@ -94,9 +113,13 @@ export class Hud {
   private readonly vignette: HTMLDivElement;
   private readonly flashEl: HTMLDivElement;
   private readonly tiredEl: HTMLDivElement;
+  private readonly witchEl: HTMLDivElement;
   private readonly lines: HTMLCanvasElement;
   private readonly numbers: HTMLDivElement;
   private impacts: { x: number; y: number; t: number; max: number; power: number; color: string; seed: number }[] = [];
+  private threatMarks: ThreatMark[] = [];
+  private beat = 0;
+  private readonly rhythmEl: HTMLDivElement;
   private floaters: { el: HTMLDivElement; t: number; world: { x: number; y: number; z: number } }[] = [];
   readonly moveList: HTMLDivElement;
   private comboTimer = 0;
@@ -106,6 +129,7 @@ export class Hud {
     this.lines = el('canvas', 'impactlines', this.root);
     this.vignette = el('div', 'vignette', this.root);
     this.tiredEl = el('div', 'tired', this.root);
+    this.witchEl = el('div', 'witch', this.root);
     this.flashEl = el('div', 'screenflash', this.root);
     this.numbers = el('div', 'numbers', this.root);
     this.player = new FighterPanel(this.root, 'left');
@@ -113,6 +137,7 @@ export class Hud {
     el('div', 'crosshair', this.root);
     this.lockMarker = el('div', 'lock', this.root);
     this.strikeEl = el('div', 'strike', this.root);
+    this.rhythmEl = el('div', 'rhythm', this.root);
     this.combo = el('div', 'combo', this.root);
     this.comboHits = el('div', 'hits', this.combo);
     this.comboInfo = el('div', 'info', this.combo);
@@ -145,6 +170,108 @@ export class Hud {
     if (this.floaters.length > 24) this.floaters.shift()?.el.remove();
   }
 
+  /** Blue "slowed time" tint while the enemy you perfect-dodged is exposed (0..1). */
+  witch(level: number): void {
+    this.witchEl.style.opacity = String(level);
+  }
+
+  /** Incoming strikes to draw this frame. */
+  threats(list: ThreatMark[]): void {
+    this.threatMarks = list;
+  }
+
+  /** "Now!": your blow landed, the next press chains on beat. */
+  beatCue(): void {
+    this.beat = 1;
+  }
+
+  /** Rhythm level of the last chained strike (0 hides it). */
+  rhythm(level: number): void {
+    if (level <= 0) {
+      this.rhythmEl.classList.remove('on');
+      return;
+    }
+    this.rhythmEl.innerHTML = `РИТМ ${'●'.repeat(level)}${'○'.repeat(Math.max(0, RULES.rhythm.max - level))}`;
+    this.rhythmEl.classList.remove('on');
+    void this.rhythmEl.offsetWidth;
+    this.rhythmEl.classList.add('on');
+  }
+
+  /** Pressed during the wind-up: the chain is locked. */
+  mash(): void {
+    this.strikeEl.classList.remove('pop');
+    this.strikeEl.classList.add('miss');
+    this.strikeEl.innerHTML = '✕ РАНО — жми, когда удар попал';
+    this.strikeTimer = 0.9;
+    this.rhythm(0);
+  }
+
+  /** A short line under the crosshair (dodge results, poise...). */
+  note(text: string, cls = ''): void {
+    this.strikeEl.className = `strike ${cls}`;
+    this.strikeEl.innerHTML = text;
+    this.strikeTimer = 0.8;
+    void this.strikeEl.offsetWidth;
+    this.strikeEl.classList.add('pop');
+  }
+
+  private drawThreats(g: CanvasRenderingContext2D, w: number, h: number, dt: number): void {
+    const cx = w / 2;
+    const cy = h / 2;
+    // Beat cue: a ring bursting out of the crosshair when your blow lands.
+    if (this.beat > 0) {
+      this.beat = Math.max(0, this.beat - dt * 4);
+      g.strokeStyle = `rgba(255,255,255,${this.beat * 0.9})`;
+      g.lineWidth = 2 + this.beat * 2;
+      g.beginPath();
+      g.arc(cx, cy, 14 + (1 - this.beat) * 26, 0, Math.PI * 2);
+      g.stroke();
+    }
+    const angle = { right: 0, bottom: Math.PI / 2, left: Math.PI, top: -Math.PI / 2 };
+    for (const t of this.threatMarks) {
+      const [r, gr, b] = t.now ? [255, 255, 255] : THREAT_COLOR[t.kind];
+      const alpha = 0.35 + t.progress * 0.65;
+      const color = `rgba(${r},${gr},${b},${alpha})`;
+      g.save();
+      g.shadowColor = `rgba(${THREAT_COLOR[t.kind].join(',')},0.9)`;
+      g.shadowBlur = t.now ? 18 : 6;
+      g.strokeStyle = color;
+      g.fillStyle = color;
+      if (t.edge !== null) {
+        // Off-screen attacker: a chevron on the screen edge pointing at it.
+        const ex = cx + Math.cos(t.edge) * Math.min(w, h) * 0.42;
+        const ey = cy + Math.sin(t.edge) * Math.min(w, h) * 0.42;
+        const s = 14 + t.progress * 10;
+        g.beginPath();
+        g.moveTo(ex + Math.cos(t.edge) * s, ey + Math.sin(t.edge) * s);
+        g.lineTo(ex + Math.cos(t.edge + 2.4) * s, ey + Math.sin(t.edge + 2.4) * s);
+        g.lineTo(ex + Math.cos(t.edge - 2.4) * s, ey + Math.sin(t.edge - 2.4) * s);
+        g.closePath();
+        g.fill();
+      }
+      const radius = 50 + (1 - t.progress) * 46;
+      g.lineWidth = (t.kind === 'light' ? 2.5 : 4) + t.progress * (t.kind === 'light' ? 3 : 6);
+      g.beginPath();
+      if (t.from === 'center') g.arc(cx, cy, 16 + (1 - t.progress) * 70, 0, Math.PI * 2);
+      else g.arc(cx, cy, radius, angle[t.from] - 0.5, angle[t.from] + 0.5);
+      g.stroke();
+      if (t.from === 'left' || t.from === 'right') {
+        // Dash hint: away from the side the swing comes from.
+        const a = angle[t.from === 'left' ? 'right' : 'left'];
+        const hx = cx + Math.cos(a) * (radius + 6);
+        const hy = cy;
+        const d = Math.cos(a);
+        g.lineWidth = 3;
+        g.beginPath();
+        g.moveTo(hx, hy - 9);
+        g.lineTo(hx + d * 10, hy);
+        g.lineTo(hx, hy + 9);
+        g.stroke();
+      }
+      g.restore();
+    }
+  }
+
   /** The strike label turns into a "miss" marker. */
   strikeMiss(): void {
     this.strikeEl.classList.add('miss');
@@ -175,6 +302,7 @@ export class Hud {
     }
     const g = c.getContext('2d')!;
     g.clearRect(0, 0, c.width, c.height);
+    this.drawThreats(g, c.width, c.height, dt);
     for (let i = this.impacts.length - 1; i >= 0; i--) {
       const im = this.impacts[i];
       im.t -= dt;
@@ -233,7 +361,7 @@ export class Hud {
 
   /** Shows which strike came out and the flick direction that picked it (teaches the controls). */
   strike(name: string, swipe: string): void {
-    this.strikeEl.classList.remove('miss');
+    this.strikeEl.className = 'strike';
     const arrow: Record<string, string> = { none: '•', left: '←', right: '→', up: '↑', down: '↓' };
     this.strikeEl.innerHTML = `<span class="arrow">${arrow[swipe] ?? '•'}</span>${name}`;
     this.strikeTimer = 0.9;
@@ -309,7 +437,10 @@ export class Hud {
       <table><tr><th>Ввод</th><th>Приём</th><th></th><th>Кадры: старт/актив/восст.</th><th></th></tr>${rows.join('')}</table>
       <h3>Свободные комбо</h3>
       <ul>
-        <li>Любой удар руками или ногами сразу после попадания переходит в <b>любой другой</b> — комбо собираешь сам</li>
+        <li>Любой удар руками или ногами сразу после попадания (или блока) переходит в <b>любой другой</b> — комбо собираешь сам</li>
+        <li><b>Ритм</b>: жми следующий удар в момент попадания (кольцо у прицела). Каждое попадание в ритм усиливает следующее (до ×3)</li>
+        <li><b>Не закликивай</b>: нажатие во время замаха (удар ещё не долетел) ломает связку — придётся ждать конца удара</li>
+        <li>Тяжёлые удары (<kbd>ПКМ</kbd>, круговые, топор) обладают <b>стойкостью</b>: джеб на их позднем замахе не прерывает их</li>
         <li>Пример: <kbd>ЛКМ</kbd> <kbd>ЛКМ</kbd> <kbd>ЛКМ ←</kbd> <kbd>ЛКМ ↑</kbd> <kbd>Q ←</kbd> — джеб, кросс, правый хук, апперкот, круговой</li>
         <li>Повторять одно и то же невыгодно: однотипные удары в одном комбо слабеют, и противник вырывается</li>
         <li><kbd>ПКМ ↑</kbd> подбрасывает → <kbd>Space</kbd> при попадании = прыжок вслед → удары в воздухе → <kbd>ПКМ</kbd> = добивание вниз</li>
@@ -320,7 +451,10 @@ export class Hud {
       <h3>Защита и выход из комбо</h3>
       <ul>
         <li><kbd>F</kbd> держать = блок спереди; стойка поворачивается медленно, так что заход сбоку работает. Нажать <kbd>F</kbd> прямо перед ударом = <b>парирование</b></li>
-        <li><kbd>Shift</kbd> = уклонение с неуязвимостью (впритык = идеальное уклонение → контратака). Держать — бег</li>
+        <li><kbd>Shift</kbd>+<kbd>A</kbd>/<kbd>D</kbd> = рывок вбок (обходит врага по дуге), <kbd>Shift</kbd>/<kbd>Shift</kbd>+<kbd>S</kbd> = отскок назад. Держать — бег</li>
+        <li>Уклониться можно от <b>любого</b> удара: от тяжёлых окно большое (успеваешь по реакции), от быстрых — маленькое (нужно предугадать)</li>
+        <li>Удар идёт слева → рывок вправо (и наоборот): так окно больше. Индикатор у прицела показывает сторону и тип удара</li>
+        <li>Рывок впритык к удару = <b>идеальный уклон</b>: враг замедлен, ты получаешь стамину и бесплатную контратаку</li>
         <li><kbd>X</kbd> в комбо при полной шкале = <b>Burst</b>, разрыв комбо</li>
         <li>В воздухе: <kbd>Space</kbd>/<kbd>Shift</kbd> после хитстана = тех; <kbd>Shift</kbd> перед приземлением = тех на земле; <kbd>Shift</kbd> лёжа = перекат</li>
         <li>Схватили: быстро <kbd>G</kbd> = разрыв броска</li>

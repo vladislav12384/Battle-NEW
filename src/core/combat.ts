@@ -2,11 +2,12 @@
  * Hit resolution: what happens when a hitbox touches a hurtbox.
  *
  * Priority of outcomes for a strike that reaches a victim:
- *   invulnerable (dodge / tech / reversal)  -> whiff (maybe "perfect dodge")
+ *   dashing within the evasion window       -> EVADE (maybe "perfect dodge")
+ *   invulnerable (tech / reversal)          -> whiff
  *   juggle limit / OTG limit reached        -> whiff (combo can't continue)
  *   guarding + parry window                 -> PARRY (attacker staggered)
  *   guarding + facing + blockable           -> BLOCK (chip, guard damage, maybe GUARD BREAK)
- *   victim has armor on this frame          -> ARMOR (damage, no stun)
+ *   victim has armor / poise on this frame  -> ARMOR (damage, no stun)
  *   otherwise                               -> HIT (scaling, stun, knockback, combo)
  */
 import {
@@ -21,6 +22,7 @@ import {
   releaseGrab,
   type SimContext,
   dodgeInvulnStart,
+  dodgeWindow,
 } from './fighterUtil';
 import { capsuleOverlap } from './math/geometry';
 import {
@@ -31,6 +33,7 @@ import {
   yawFromDir,
 } from './math/vec3';
 import {
+  armorOf,
   chestPos,
   hitboxCapsule,
   hurtCapsule,
@@ -40,10 +43,10 @@ import {
 } from './moves';
 import { RULES, TICK_RATE } from './rules';
 import type { FighterState, ProjectileState } from './state';
-import type { HitDef, HitboxDef, MoveDef } from './types';
+import type { ArmorDef, HitDef, HitboxDef, MoveDef } from './types';
 
 export type HitSource = 'strike' | 'projectile' | 'burst' | 'throw';
-export type HitResult = 'hit' | 'block' | 'parry' | 'armor' | 'guardBreak' | 'whiff';
+export type HitResult = 'hit' | 'block' | 'parry' | 'armor' | 'guardBreak' | 'evade' | 'whiff';
 
 export interface HitContext {
   attacker: FighterState;
@@ -68,10 +71,15 @@ export function resolveHit(sim: SimContext, ctx: HitContext): HitResult {
   const { attacker: a, victim: v, hit } = ctx;
   if (v.state === 'ko' || v.team === a.team) return 'whiff';
 
-  const inv: Invuln = invulnerability(sim, v);
-  if (inv === 'all' || (inv === 'strike' && ctx.source !== 'throw')) {
-    checkPerfectDodge(sim, v, a, ctx);
-    return 'whiff';
+  if (v.state === 'dodge') {
+    const ev = evasion(v, ctx);
+    if (ev !== 'none') {
+      onEvade(sim, v, a, ctx, ev === 'perfect');
+      return 'evade';
+    }
+  } else {
+    const inv: Invuln = invulnerability(sim, v);
+    if (inv === 'all' || (inv === 'strike' && ctx.source !== 'throw')) return 'whiff';
   }
   if (v.combo.hits > 0 && isAirborneVictim(v) && v.combo.juggle >= RULES.juggleLimit) return 'whiff';
   if (v.state === 'knockdown' && v.combo.otgHits >= RULES.maxOtgHits) return 'whiff';
@@ -89,18 +97,39 @@ export function resolveHit(sim: SimContext, ctx: HitContext): HitResult {
 
   if (v.state === 'attack' && v.armorLeft > 0 && ctx.source !== 'burst') {
     const m = sim.moveOf(v);
-    if (m?.armor && inFrames(m.armor.frames, v.moveFrame)) return applyArmor(sim, ctx, m);
+    const armor = m ? armorOf(m) : null;
+    const resists = armor && (armor.vs !== 'light' || (ctx.source === 'strike' && ctx.move?.kind === 'light'));
+    if (armor && resists && inFrames(armor.frames, v.moveFrame)) return applyArmor(sim, ctx, armor);
   }
   return applyHit(sim, ctx);
 }
 
-function checkPerfectDodge(sim: SimContext, v: FighterState, a: FighterState, ctx: HitContext): void {
-  if (v.state !== 'dodge' || v.perfectDodged || ctx.source === 'burst') return;
+/**
+ * Does a dashing victim get out of this hit? The window depends on the
+ * strike (kind + trajectory) and on which way the victim dashes; the last
+ * few frames before impact count as a perfect dodge.
+ */
+function evasion(v: FighterState, ctx: HitContext): 'none' | 'evade' | 'perfect' {
   const start = dodgeInvulnStart(v);
-  if (v.stateFrame > start + RULES.dodge.perfectWindow - 1) return;
+  const t = v.stateFrame;
+  if (t < start) return 'none';
+  const end = v.dodgeAir || ctx.source === 'burst' ? v.dodgeInvulnEnd : start + dodgeWindow(v, ctx.move, ctx.from) - 1;
+  if (t > end) return 'none';
+  return t <= start + RULES.dodge.perfectWindow - 1 && ctx.source !== 'burst' ? 'perfect' : 'evade';
+}
+
+function onEvade(sim: SimContext, v: FighterState, a: FighterState, ctx: HitContext, perfect: boolean): void {
+  if (!perfect || v.perfectDodged) {
+    sim.emit({ type: 'evade', fighter: v.id, attacker: a.id, point: ctx.point });
+    return;
+  }
+  // Perfect dodge: counter straight out of the dash while the attacker,
+  // overextended, moves at half speed for a moment.
   v.perfectDodged = true;
   v.dodgeCounter = true;
   v.meter = Math.min(RULES.meterMax, v.meter + RULES.perfectDodgeMeter);
+  v.stamina = Math.min(sim.statsOf(v).maxStamina, v.stamina + RULES.dodge.perfectStamina);
+  if (ctx.source === 'strike') a.exposed = RULES.dodge.exposeFrames;
   sim.emit({ type: 'perfectDodge', fighter: v.id, attacker: a.id });
 }
 
@@ -187,9 +216,9 @@ function applyGuardBreak(sim: SimContext, ctx: HitContext): HitResult {
   return 'guardBreak';
 }
 
-function applyArmor(sim: SimContext, ctx: HitContext, m: MoveDef): HitResult {
+function applyArmor(sim: SimContext, ctx: HitContext, armor: ArmorDef): HitResult {
   const { attacker: a, victim: v, hit } = ctx;
-  const dmg = Math.round(hit.damage * (m.armor?.damageTaken ?? 0.5));
+  const dmg = Math.round(hit.damage * (armor.damageTaken ?? 0.5));
   if (v.health - dmg <= 0) return applyHit(sim, ctx); // armor never saves you from a KO
   v.health -= dmg;
   v.armorLeft--;
@@ -197,10 +226,11 @@ function applyArmor(sim: SimContext, ctx: HitContext, m: MoveDef): HitResult {
   v.hitstop = Math.max(v.hitstop, stop);
   v.shake = stop;
   if (ctx.source === 'strike') {
+    // The strike bounced off: no chain out of it (and no whiff penalty either).
     a.hitstop = Math.max(a.hitstop, stop);
-    a.moveBlocked = true;
+    a.moveAbsorbed = true;
   }
-  sim.emit({ type: 'armor', attacker: a.id, victim: v.id, damage: dmg, point: ctx.point });
+  sim.emit({ type: 'armor', attacker: a.id, victim: v.id, damage: dmg, point: ctx.point, poise: armor.vs === 'light' });
   return 'armor';
 }
 
@@ -239,6 +269,7 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
   const wasDown = v.state === 'knockdown';
   const wasStaggered = v.state === 'stagger';
   releaseGrab(sim, v);
+  v.exposed = 0;
 
   // ---- combo bookkeeping (lives on the victim, shared by all attackers)
   const c = v.combo;
@@ -263,14 +294,16 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
     if (c.recent.length > RULES.staleWindow) c.recent.shift();
   }
 
-  // ---- damage
+  // ---- damage (on-beat chains hit harder)
+  const rhythm = ctx.source === 'strike' ? a.rhythm : 0;
   const minScale = hit.minScaling ?? ctx.move?.minScaling ?? RULES.damageScaleMin;
   const raw =
     hit.damage *
     damageScaling(c.hits, minScale) *
     staleDmg *
     (counter ? RULES.counterDamage : 1) *
-    (1 + (ctx.chargeBonus ?? 0));
+    (1 + (ctx.chargeBonus ?? 0)) *
+    (1 + rhythm * RULES.rhythm.damage);
   const dmg = hit.damage > 0 ? Math.max(1, Math.round(raw)) : 0;
   v.health -= dmg;
   c.damage += dmg;
@@ -302,7 +335,8 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
 
   // Heavy blows that land deep in a combo get extra weight (finisher freeze).
   const finisher = c.hits >= 3 && (ctx.move?.kind === 'heavy' || launches) && ctx.source === 'strike';
-  const stop = defaultHitstop(hit) + (counter ? 3 : 0) + (finisher ? RULES.finisherHitstop : 0);
+  const stop =
+    defaultHitstop(hit) + (counter ? 3 : 0) + (finisher ? RULES.finisherHitstop : 0) + rhythm * RULES.rhythm.hitstop;
   let ko = false;
   if (v.health <= 0) {
     v.health = 0;
@@ -359,6 +393,7 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
     hitstop: stop,
     ...knockDir(vx, vy, vz, ctx),
     move: ctx.move?.id ?? null,
+    rhythm,
   });
   if (ko) sim.emit({ type: 'ko', fighter: v.id, attacker: a.id });
   return 'hit';

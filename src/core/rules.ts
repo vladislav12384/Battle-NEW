@@ -78,6 +78,22 @@ export const RULES = {
   /** ...and damage lost. */
   staleDamageStep: 0.1,
   staleDamageMin: 0.6,
+  /**
+   * Rhythm instead of mashing. Strikes chain only on contact, and the next
+   * press must come AFTER the blow lands: pressing a strike button during
+   * another strike's wind-up is mashing and locks that strike's chain.
+   * A chain press during the impact freeze or within `beatWindow` frames
+   * after the active frames is "on beat"...
+   */
+  beatWindow: 6,
+  /** ...and every consecutive on-beat chain hits harder. */
+  rhythm: { max: 3, damage: 0.07, hitstop: 1 },
+  /**
+   * Poise of heavy blows: from this fraction of the startup until the end of
+   * the active frames a light strike doesn't interrupt them (half damage).
+   * Jabbing into a heavy you saw coming loses; dodge it instead.
+   */
+  poise: { from: 0.45, damageTaken: 0.5 },
   /** Heavies can be feinted with BLOCK until this many frames before their first active frame. */
   feintLock: 3,
   /** Straights stop alternating hands after this long without a hand strike. */
@@ -102,17 +118,45 @@ export const RULES = {
   blockPushScale: 0.55,
 
   // ---------------------------------------------------------------- evasion
+  /**
+   * Dash (DODGE + direction). Whether a dash gets you out of a strike depends
+   * on the strike: the evasion window (frames, counted from invulnStart) is
+   * long against slow heavy blows and short against quick jabs, and depends
+   * on which way you dash (see StrikeLine). EVERY strike can be dodged; fast
+   * ones need a read, slow ones can be dodged on reaction.
+   */
   dodge: {
     frames: 28,
-    invulnStart: 3,
-    invulnEnd: 15,
+    invulnStart: 2,
+    /** Generic invulnerability (throws, bursts) ends here. */
+    invulnEnd: 14,
     speed: 8.5,
-    /** Dodging a hit within this many frames of invulnStart is a "perfect dodge". */
-    perfectWindow: 6,
-    /** Each consecutive dodge loses this many invulnerable frames. */
+    /** Evasion window by the kind of strike being dodged. */
+    window: { light: 12, heavy: 18, special: 14, super: 12, throw: 12 },
+    /** Dashing away from the side a swing comes from (past where it ends)... */
+    goodSide: 4,
+    /** ...or into it. */
+    badSide: -4,
+    /** Sidestepping a vertical blow is easy. */
+    overheadSide: 2,
+    /** Backsteps rely on distance; dashing forward into a strike is risky. */
+    back: -3,
+    forward: -6,
+    /** Backsteps are shorter than side dashes: retreating is a reset, not a free escape. */
+    backSpeed: 0.8,
+    minWindow: 3,
+    /** Dodging within this many frames of invulnStart is a "perfect dodge". */
+    perfectWindow: 5,
+    /** Each consecutive dodge loses this many evasion frames. */
     chainPenalty: 4,
     chainReset: 50,
     minInvuln: 3,
+    /** Side dashes curve around an enemy in front within this range (circling). */
+    orbitRange: 3.5,
+    /** A perfect dodge leaves the attacker exposed: it acts at half speed for this long. */
+    exposeFrames: 40,
+    /** Stamina given back by a perfect dodge. */
+    perfectStamina: 10,
   },
   airDodge: { frames: 24, invulnStart: 1, invulnEnd: 12, speed: 7.5 },
   /** Meter cost to cancel any attack into a dodge (escape/extension tool). */
