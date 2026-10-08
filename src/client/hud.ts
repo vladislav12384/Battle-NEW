@@ -87,6 +87,7 @@ const THREAT_COLOR: Record<ThreatMark['kind'], [number, number, number]> = {
 
 export interface TrainingInfo {
   dummyMode: string;
+  level: string;
   hitboxes: boolean;
   slowmo: boolean;
   infiniteMeter: boolean;
@@ -394,6 +395,7 @@ export class Hud {
       <div class="title">ПОЛИГОН</div>
       <div>Преимущество по кадрам: ${adv}</div>
       <div><kbd>1</kbd> хитбоксы: <b>${info.hitboxes ? 'вкл' : 'выкл'}</b></div>
+      <div><kbd>8</kbd> сложность: <b>${info.level}</b></div>
       <div><kbd>2</kbd> манекен: <b>${info.dummyMode}</b></div>
       <div><kbd>3</kbd> замедление: <b>${info.slowmo ? '25%' : 'выкл'}</b></div>
       <div><kbd>4</kbd> сброс позиций</div>

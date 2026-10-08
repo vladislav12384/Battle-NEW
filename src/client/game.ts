@@ -4,7 +4,7 @@
  */
 import * as THREE from 'three';
 import { CHARACTERS } from '../content';
-import { Bot, type BotMode } from '../core/ai/bot';
+import { Bot, type BotLevel, type BotMode } from '../core/ai/bot';
 import { chargeRatio } from '../core/combat';
 import { type InputFrame } from '../core/input';
 import { aimedPoint, chestHeight, chestPos, movePitch, moveReach, strikeLine } from '../core/moves';
@@ -77,6 +77,9 @@ const LIMB_JOINT: Record<string, 'lHand' | 'rHand' | 'lFoot' | 'rFoot' | 'chest'
 
 const ACTIONABLE = new Set(['ground', 'air', 'block']);
 
+export const BOT_LEVEL_LABEL: Record<BotLevel, string> = { easy: 'лёгкий', normal: 'средний', hard: 'сложный' };
+const LEVELS: BotLevel[] = ['easy', 'normal', 'hard'];
+
 export interface GameOptions {
   /** The local player is driven by a bot (attract mode / screenshots). */
   demo?: boolean;
@@ -88,6 +91,8 @@ export interface GameOptions {
   dummyMode?: BotMode;
   /** Behaviour of the demo bot driving the local player. */
   demoMode?: BotMode;
+  /** Difficulty of enemy bots. */
+  level?: BotLevel;
 }
 
 export class Game {
@@ -106,6 +111,7 @@ export class Game {
     infiniteMeter: false,
     thirdPerson: false,
     dummyMode: 'fighter' as BotMode,
+    level: 'normal' as BotLevel,
     allies: 0,
     enemies: 1,
   };
@@ -125,6 +131,8 @@ export class Game {
   private dilation = { t: 0, scale: 1 };
   /** Debug/tooling hook: drives the local player with a script instead of the devices. */
   scriptedInput: ((tick: number, game: Game) => Partial<InputFrame>) | null = null;
+  /** Called when the difficulty is changed in game (to remember it). */
+  onLevelChange: ((level: BotLevel) => void) | null = null;
   /** Debug/tooling hook: overrides the camera after it has been placed. */
   cameraOverride: ((camera: THREE.PerspectiveCamera, game: Game) => void) | null = null;
   private scriptTick = 0;
@@ -143,6 +151,7 @@ export class Game {
     this.settings.enemies = opts.enemies ?? 1;
     this.settings.allies = opts.allies ?? 0;
     if (opts.dummyMode) this.settings.dummyMode = opts.dummyMode;
+    if (opts.level) this.settings.level = opts.level;
     this.hud.buildMoveList(CHARACTERS.striker);
     this.resetScenario();
     window.addEventListener('resize', () => this.world.resize());
@@ -179,9 +188,17 @@ export class Game {
       yaw: enemy ? Math.PI : 0,
       name: enemy ? `${CHARACTERS[charId].name} ${index + 1}` : `Ally ${index + 1}`,
     });
-    const bot = new Bot(f.id, { seed: 1000 + f.id * 17, aggression: enemy ? 0.55 : 0.7 });
+    const bot = new Bot(f.id, { seed: 1000 + f.id * 17 });
+    // Enemies use the chosen difficulty; allies are solid partners.
+    bot.setLevel(enemy ? this.settings.level : 'normal');
     if (enemy) bot.setMode(this.settings.dummyMode);
     this.bots.set(f.id, bot);
+  }
+
+  /** Difficulty of enemy bots (applies to the ones already fighting too). */
+  setLevel(level: BotLevel): void {
+    this.settings.level = level;
+    for (const [id, b] of this.bots) if (this.sim.fighter(id)?.team === 1) b.setLevel(level);
   }
 
   private onKey(e: KeyboardEvent): void {
@@ -221,6 +238,13 @@ export class Game {
       case 'KeyV':
         this.settings.thirdPerson = !this.settings.thirdPerson;
         break;
+      case 'Digit8': {
+        const next = LEVELS[(LEVELS.indexOf(this.settings.level) + 1) % LEVELS.length];
+        this.setLevel(next);
+        this.onLevelChange?.(next);
+        this.hud.callout(`Сложность: ${BOT_LEVEL_LABEL[next]}`, 'info');
+        break;
+      }
       case 'KeyH':
         this.hud.toggleMoveList();
         break;
@@ -799,6 +823,7 @@ export class Game {
     const target = lock ?? sim.fighter(this.lastTarget) ?? sim.state.fighters.find((f) => f.team !== 0);
     this.hud.update(sim, me, target, {
       dummyMode: DUMMY_LABEL[this.settings.dummyMode],
+      level: BOT_LEVEL_LABEL[this.settings.level],
       hitboxes: this.settings.hitboxes,
       slowmo: this.settings.slowmo,
       infiniteMeter: this.settings.infiniteMeter,

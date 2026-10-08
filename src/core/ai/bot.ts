@@ -3,6 +3,11 @@
  * simulation and produces an InputFrame, exactly like a human player, so
  * bots obey every rule (buffers, cancel windows, meter, tech timing).
  *
+ * Difficulty (BOT_LEVELS): reaction time and its spread, aim tracking and
+ * error, timing mistakes and abandoned strings, defense habits, how long the
+ * strings it knows are. The bot reads the simulation, so the levels make it
+ * deliberately imperfect, like a person.
+ *
  * Modes:
  *   idle    - stands still (still techs/bursts if configured)
  *   block   - holds guard forever
@@ -13,7 +18,7 @@
 import { chainWindowStart } from '../fighter';
 import { Button, type Dir, type InputFrame, neutralInput, type Swipe, swipeCode } from '../input';
 import { chance, nextRandom, type RngState } from '../math/rng';
-import { hDistance, wrapAngle, yawFromDir, yawTo } from '../math/vec3';
+import { approachAngle, hDistance, wrapAngle, yawFromDir, yawTo } from '../math/vec3';
 import { chestHeight, moveReach, strikeLine, totalFrames } from '../moves';
 import { RULES } from '../rules';
 import type { Simulation } from '../simulation';
@@ -21,11 +26,28 @@ import type { FighterState } from '../state';
 import type { MoveDef, StrikeLine } from '../types';
 
 export type BotMode = 'idle' | 'block' | 'parry' | 'dodge' | 'fighter';
+export type BotLevel = 'easy' | 'normal' | 'hard';
 
 export interface BotConfig {
   mode: BotMode;
-  /** Frames into an enemy attack before the bot notices it (human ~12-20). */
+  /** Frames into an enemy attack before the bot notices it (human ~15-20). */
   reaction: number;
+  /** Random extra reaction frames per attack (people aren't metronomes). */
+  reactionJitter: number;
+  /** How fast the bot's view turns toward its target (rad/frame)... */
+  aimTurn: number;
+  /** ...and how far its aim wanders (rad). */
+  aimError: number;
+  /** Up to this many frames late on each chained press (late = broken string). */
+  timingError: number;
+  /** Chance to stop a string halfway. */
+  dropChance: number;
+  /** Chance that a dodge is timed at the last moment (perfect dodge). */
+  perfectDodge: number;
+  /** Frames between its attacks [min, max]. */
+  cooldown: [number, number];
+  /** 0 = short strings only, 1 = medium, 2 = launchers and full strings. */
+  comboLevel: number;
   /** 0..1, how often it starts offense. */
   aggression: number;
   blockChance: number;
@@ -38,18 +60,68 @@ export interface BotConfig {
   seed: number;
 }
 
-export const DEFAULT_BOT: BotConfig = {
-  mode: 'fighter',
-  reaction: 14,
-  aggression: 0.5,
-  blockChance: 0.55,
-  parryChance: 0.15,
-  dodgeChance: 0.15,
-  techChance: 0.6,
-  burstChance: 0.5,
-  burstAtHits: 7,
-  seed: 1234,
+/** Difficulty presets (everything except mode and seed). */
+export const BOT_LEVELS: Record<BotLevel, Omit<BotConfig, 'mode' | 'seed'>> = {
+  // Beginner: slow and late, aims sloppily, short strings, rarely defends well.
+  easy: {
+    reaction: 26,
+    reactionJitter: 10,
+    aimTurn: 0.06,
+    aimError: 0.16,
+    timingError: 7,
+    dropChance: 0.35,
+    perfectDodge: 0.05,
+    cooldown: [80, 150],
+    comboLevel: 0,
+    aggression: 0.3,
+    blockChance: 0.3,
+    parryChance: 0,
+    dodgeChance: 0.04,
+    techChance: 0.15,
+    burstChance: 0.1,
+    burstAtHits: 9,
+  },
+  // Fighter: human-like reactions and the occasional mistake.
+  normal: {
+    reaction: 20,
+    reactionJitter: 6,
+    aimTurn: 0.12,
+    aimError: 0.07,
+    timingError: 3,
+    dropChance: 0.15,
+    perfectDodge: 0.2,
+    cooldown: [50, 100],
+    comboLevel: 1,
+    aggression: 0.45,
+    blockChance: 0.45,
+    parryChance: 0.05,
+    dodgeChance: 0.12,
+    techChance: 0.45,
+    burstChance: 0.35,
+    burstAtHits: 7,
+  },
+  // Master: sharp reactions, clean strings, parries and perfect dodges.
+  hard: {
+    reaction: 14,
+    reactionJitter: 2,
+    aimTurn: 0.3,
+    aimError: 0.02,
+    timingError: 0,
+    dropChance: 0,
+    perfectDodge: 0.35,
+    cooldown: [30, 70],
+    comboLevel: 2,
+    aggression: 0.6,
+    blockChance: 0.55,
+    parryChance: 0.15,
+    dodgeChance: 0.18,
+    techChance: 0.7,
+    burstChance: 0.55,
+    burstAtHits: 6,
+  },
 };
+
+export const DEFAULT_BOT: BotConfig = { mode: 'fighter', ...BOT_LEVELS.hard, seed: 1234 };
 
 interface Step {
   button: number;
@@ -68,6 +140,7 @@ const { LIGHT: L, HEAVY: H, SPECIAL: E, JUMP: J, GRAB: G, BLOCK, DODGE, BURST } 
  * uppercut; a power press finishes with whatever fits that position.
  */
 const PLANS: Record<string, Step[]> = {
+  jab2: [{ button: L }, { button: L, onHit: true }],
   boxing: [{ button: L }, { button: L }, { button: L }, { button: L, onHit: true }],
   kick: [{ button: L }, { button: H, onHit: true }], // jab -> roundhouse
   backfist: [{ button: L }, { button: L }, { button: H, onHit: true }], // jab, cross -> spinning backfist
@@ -131,6 +204,14 @@ export class Bot {
   private escapeKey = '';
   private escapeAt = -1;
   private burstDecidedFor = -1;
+  /** Where the bot is looking (it turns like a player with a mouse, not instantly). */
+  private aimYaw: number | null = null;
+  private aimDrift = 0;
+  /** Reaction rolled for the current threat. */
+  private reactKey = '';
+  private reactFrames = 0;
+  /** Extra frames to wait before the next chained press (timing mistake). */
+  private late = 0;
 
   constructor(
     readonly fighterId: number,
@@ -156,7 +237,13 @@ export class Bot {
     this.pendingTaps = 0;
 
     if (target) {
-      out.yaw = yawTo(f.pos, target.pos);
+      // Imperfect aim: the view turns at a limited speed and wanders a little.
+      const cfg = this.config;
+      this.aimDrift += (nextRandom(this.rng) - 0.5) * 0.08;
+      this.aimDrift *= 0.97;
+      const want = yawTo(f.pos, target.pos) + Math.max(-1, Math.min(1, this.aimDrift * 6)) * cfg.aimError;
+      this.aimYaw = this.aimYaw === null ? want : approachAngle(this.aimYaw, want, cfg.aimTurn);
+      out.yaw = this.aimYaw;
       const ts = sim.statsOf(target);
       const fs = sim.statsOf(f);
       out.pitch = Math.atan2(
@@ -243,10 +330,11 @@ export class Bot {
       if (m.hitboxes.length && hDistance(e.pos, f.pos) > reach) continue;
       const ang = Math.abs(wrapAngle(yawFromDir(f.pos.x - e.pos.x, f.pos.z - e.pos.z) - e.yaw));
       if (ang > 0.9 && e.moveTarget !== f.id) continue;
+      const key = `${e.id}:${e.move}:${sim.state.frame - e.moveFrame}`;
       const t: Threat = {
-        key: `${e.id}:${e.move}:${sim.state.frame - e.moveFrame}`,
+        key,
         framesToHit: Math.max(0, firstHit - e.moveFrame - 1),
-        perceived: e.moveFrame >= this.config.reaction,
+        perceived: e.moveFrame >= this.reactionFor(key),
         kind: m.kind,
         line: strikeLine(m),
       };
@@ -264,6 +352,15 @@ export class Bot {
       if (!best || t.framesToHit < best.framesToHit) best = t;
     }
     return best;
+  }
+
+  /** Reaction time for an attack (rolled once per attack). */
+  private reactionFor(key: string): number {
+    if (key !== this.reactKey) {
+      this.reactKey = key;
+      this.reactFrames = this.config.reaction + Math.floor(nextRandom(this.rng) * (this.config.reactionJitter + 1));
+    }
+    return this.reactFrames;
   }
 
   /** Tech, throw-tech and burst decisions. Returns buttons to tap. */
@@ -315,7 +412,9 @@ export class Bot {
       else if (r < cfg.parryChance + dodge + cfg.blockChance) this.defense = 'block';
       else this.defense = 'none';
       // Dash timing: sometimes right at the last moment (perfect), usually a bit early.
-      this.dodgeLead = chance(this.rng, 0.35) ? 3 + Math.floor(nextRandom(this.rng) * 3) : 6 + Math.floor(nextRandom(this.rng) * 6);
+      this.dodgeLead = chance(this.rng, cfg.perfectDodge)
+        ? 3 + Math.floor(nextRandom(this.rng) * 3)
+        : 6 + Math.floor(nextRandom(this.rng) * 6);
     }
     if (this.defense !== 'none' && threat && threat.key === this.threatKey) {
       if (this.defense === 'parry' && !this.defenseDone && threat.framesToHit <= 2) {
@@ -407,8 +506,29 @@ export class Bot {
   }
 
   private pickPlan(f: FighterState, target: FighterState): string {
-    if (f.meter >= 100 && chance(this.rng, 0.15)) return 'super';
-    if (target.state === 'block' && chance(this.rng, 0.45)) return chance(this.rng, 0.5) ? 'grab' : 'sweep';
+    const lvl = this.config.comboLevel;
+    if (lvl >= 2 && f.meter >= 100 && chance(this.rng, 0.15)) return 'super';
+    if (target.state === 'block' && chance(this.rng, 0.15 + 0.15 * lvl)) return chance(this.rng, 0.5) ? 'grab' : 'sweep';
+    if (lvl === 0) {
+      const r = nextRandom(this.rng);
+      if (r < 0.3) return 'jab2';
+      if (r < 0.5) return 'kick';
+      if (r < 0.7) return 'haymaker';
+      if (r < 0.82) return 'teep';
+      if (r < 0.92) return 'sweep';
+      return 'grab';
+    }
+    if (lvl === 1) {
+      const r = nextRandom(this.rng);
+      if (r < 0.25) return 'boxing';
+      if (r < 0.42) return 'kick';
+      if (r < 0.56) return 'backfist';
+      if (r < 0.7) return 'haymaker';
+      if (r < 0.8) return 'grab';
+      if (r < 0.88) return 'sweep';
+      if (r < 0.94) return 'teep';
+      return 'pokeBlast';
+    }
     const r = nextRandom(this.rng);
     if (r < 0.18) return 'boxing';
     if (r < 0.32) return 'kick';
@@ -447,7 +567,11 @@ export class Bot {
       if (this.waiting) return 0;
       if (step.onHit && f.moveFrame > m.startup + m.active && !f.moveHit) return this.endPlan();
       const window = Math.min(chainWindowStart(m, step.button, f.moveHit || f.moveBlocked), totalFrames(m) - 1);
-      if (f.moveFrame >= window - 2 && (!step.onHit || f.moveHit)) return this.tapStep(step);
+      if (f.moveFrame >= window - 2 + this.late && (!step.onHit || f.moveHit)) {
+        // Weaker bots lose the thread of a string now and then.
+        if (chance(this.rng, this.config.dropChance)) return this.endPlan();
+        return this.tapStep(step);
+      }
       return 0;
     }
     if (f.state === 'ground' || f.state === 'air' || f.state === 'block' || (f.state === 'dodge' && f.dodgeCounter)) {
@@ -471,14 +595,25 @@ export class Bot {
     this.stepDir = step.dir ?? 'neutral';
     this.stepDirTimer = 10;
     this.stepSwipe = step.swipe ?? 'none';
-    if (this.plan.length === 0) this.cooldown = 40 + Math.floor(nextRandom(this.rng) * 50);
+    this.late = Math.floor(nextRandom(this.rng) * (this.config.timingError + 1));
+    if (this.plan.length === 0) this.cooldown = this.rollCooldown();
     return step.button;
+  }
+
+  private rollCooldown(): number {
+    const [lo, hi] = this.config.cooldown;
+    return lo + Math.floor(nextRandom(this.rng) * (hi - lo + 1));
+  }
+
+  /** Switches difficulty, keeping the mode. */
+  setLevel(level: BotLevel): void {
+    this.config = { ...this.config, ...BOT_LEVELS[level] };
   }
 
   private endPlan(): number {
     this.plan = [];
     this.waiting = false;
-    this.cooldown = 20 + Math.floor(nextRandom(this.rng) * 30);
+    this.cooldown = Math.round(this.rollCooldown() * 0.5);
     return 0;
   }
 }

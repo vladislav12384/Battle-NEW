@@ -100,8 +100,45 @@ kbd {
   grid-template-columns: 1fr 1fr;
   gap: 28px;
 }
+.levels {
+  margin-top: 20px;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.levels span {
+  align-self: center;
+  color: var(--muted);
+  font-size: 14px;
+  margin-right: 4px;
+}
+.levels button {
+  flex: 1;
+  min-width: 140px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(125, 211, 252, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.levels button small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.levels button.on {
+  border-color: #7dd3fc;
+  background: rgba(125, 211, 252, 0.16);
+  box-shadow: 0 0 12px rgba(125, 211, 252, 0.35);
+}
 #play {
-  margin-top: 22px;
+  margin-top: 16px;
   width: 100%;
   padding: 14px;
   font-size: 18px;

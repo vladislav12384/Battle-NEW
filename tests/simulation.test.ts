@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Bot } from '../src/core/ai/bot';
+import { Bot, type BotLevel } from '../src/core/ai/bot';
 import type { InputFrame } from '../src/core/input';
 import { vec3 } from '../src/core/math/vec3';
 import type { Simulation } from '../src/core/simulation';
@@ -118,5 +118,44 @@ describe('co-op', () => {
       sim.step({ [p1.id]: { moveX: 0, moveY: 0, yaw: 0, pitch: 0, buttons: t === 0 ? B.HEAVY : 0 } });
     }
     expect(sim.fighter(p2.id)!.health).toBe(1000);
+  });
+});
+
+describe('bot difficulty', () => {
+  /** Damage dealt by each side in a minute-long 1v1 between two levels, over a few seeds. */
+  function duelLevels(x: BotLevel, y: BotLevel): [number, number] {
+    let dx = 0;
+    let dy = 0;
+    for (const seed of [1, 2, 3]) {
+      const sim = newSim({ seed, respawn: true });
+      const a = sim.addFighter({ charId: 'striker', team: 0, pos: vec3(0, 0, 2) });
+      const b = sim.addFighter({ charId: 'striker', team: 1, pos: vec3(0, 0, -2), yaw: Math.PI });
+      const ba = new Bot(a.id, { seed: seed * 7 });
+      const bb = new Bot(b.id, { seed: seed * 13 });
+      ba.setLevel(x);
+      bb.setLevel(y);
+      for (let t = 0; t < 3600; t++) {
+        for (const e of sim.step({ [a.id]: ba.think(sim), [b.id]: bb.think(sim) })) {
+          if (e.type !== 'hit') continue;
+          if (e.attacker === a.id) dx += e.damage;
+          else dy += e.damage;
+        }
+      }
+    }
+    return [dx, dy];
+  }
+
+  it('harder levels clearly beat easier ones', () => {
+    const [hard, easy] = duelLevels('hard', 'easy');
+    expect(hard).toBeGreaterThan(easy * 2);
+    const [normal, easy2] = duelLevels('normal', 'easy');
+    expect(normal).toBeGreaterThan(easy2 * 1.4);
+  });
+
+  it('switching level keeps the bot mode', () => {
+    const bot = new Bot(1, { mode: 'block' });
+    bot.setLevel('easy');
+    expect(bot.config.mode).toBe('block');
+    expect(bot.config.reaction).toBeGreaterThan(20);
   });
 });
