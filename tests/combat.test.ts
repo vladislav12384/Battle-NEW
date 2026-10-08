@@ -2,18 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { RULES } from '../src/core/rules';
 import type { Swipe } from '../src/core/input';
 import { DEG, vec3, wrapAngle, yawTo } from '../src/core/math/vec3';
-import { B, duel, escaper, playSequence, type Step } from './helpers';
+import { B, blocker, duel, escaper, playSequence, type Step } from './helpers';
 
 describe('frame data', () => {
-  it('a jab (startup 5) connects on its 6th frame', () => {
-    const { a, h } = duel(1.2);
+  it('a jab connects on the first frame after its startup', () => {
+    const { a, h, sim } = duel(1.2);
+    const jab = sim.chars.striker.moves.jab;
     h.step({ [a.id]: { buttons: B.LIGHT } }); // move frame 1
     let frames = 1;
-    while (h.of('hit').length === 0 && frames < 30) {
+    while (h.of('hit').length === 0 && frames < 40) {
       h.step();
       frames++;
     }
-    expect(frames).toBe(6);
+    expect(frames).toBe(jab.startup + 1);
   });
 
   it('measured advantage on hit matches hitstun - (active + recovery - 1)', () => {
@@ -109,18 +110,18 @@ describe('free-form combos', () => {
   it('spamming one strike goes stale and the victim escapes; mixing keeps it true', () => {
     const spam = duel(1.2);
     playSequence(spam.h, spam.a.id, Array.from({ length: 7 }, () => sw(B.LIGHT)), {
-      [spam.b.id]: escaper(spam.b.id),
+      [spam.b.id]: blocker(spam.b.id),
     });
     const spamHits = spam.h.of('hit').filter((e) => e.attacker === spam.a.id).length;
     expect(spamHits).toBeLessThan(7);
-    expect(spam.h.of('dodge').length + spam.h.of('block').length).toBeGreaterThan(0);
+    expect(spam.h.of('block').length).toBeGreaterThan(0);
 
     const mix = duel(1.2);
     playSequence(
       mix.h,
       mix.a.id,
       [sw(B.LIGHT), sw(B.LIGHT), sw(B.LIGHT, 'down'), sw(B.LIGHT, 'left'), sw(B.LIGHT, 'right')],
-      { [mix.b.id]: escaper(mix.b.id) },
+      { [mix.b.id]: blocker(mix.b.id) },
     );
     expect(mix.h.of('comboEnd')[0]?.hits).toBe(5);
     expect(mix.h.of('comboEnd')[0]?.trueCombo).toBe(true);
@@ -138,15 +139,31 @@ describe('free-form combos', () => {
     expect(h.of('attack').length).toBe(1);
   });
 
-  it('a whiffed light chains a few frames later than on hit', () => {
+  it('a missed punch cannot chain: it plays out its recovery plus a whiff penalty', () => {
     const { a, h, sim } = duel(5);
     const jab = sim.chars.striker.moves.jab;
     h.step({ [a.id]: { buttons: B.LIGHT } });
-    h.step();
-    h.step({ [a.id]: { buttons: B.LIGHT } }); // buffered
-    const start = jab.startup + jab.active + 1 + RULES.flowWhiffDelay;
-    h.until(() => h.fighter(a.id).move === 'cross');
-    expect(h.sim.state.frame).toBe(start);
+    let t = 1;
+    while (h.fighter(a.id).state === 'attack' && t < 100) {
+      // Mash punches: none of them may come out before the jab is over.
+      h.step({ [a.id]: { buttons: t % 2 ? B.LIGHT : 0 } });
+      t++;
+      if (h.fighter(a.id).move === 'cross') break;
+    }
+    expect(h.of('whiff').length).toBe(1);
+    expect(t).toBeGreaterThanOrEqual(jab.startup + jab.active + jab.recovery + RULES.whiffPenalty.light);
+  });
+
+  it('missing costs stamina, landing refunds part of it', () => {
+    const miss = duel(5);
+    miss.h.step({ [miss.a.id]: { buttons: B.HEAVY } });
+    miss.h.run(10);
+    const afterMiss = miss.h.fighter(miss.a.id).stamina;
+    const hit = duel(1.2);
+    hit.h.step({ [hit.a.id]: { buttons: B.HEAVY } });
+    hit.h.until(() => hit.h.of('hit').length > 0);
+    hit.h.step();
+    expect(hit.h.fighter(hit.a.id).stamina).toBeGreaterThan(afterMiss);
   });
 
   it('pressing the next punch after the first one ends leaves a gap the victim escapes through', () => {
@@ -171,6 +188,7 @@ describe('free-form combos', () => {
       a.id,
       [sw(B.LIGHT), sw(B.LIGHT, 'down'), sw(B.HEAVY, 'up'), sw(B.JUMP), sw(B.LIGHT), sw(B.LIGHT), sw(B.HEAVY)],
       { [b.id]: watch },
+      240,
     );
     const hits = h.of('hit').filter((e) => e.attacker === a.id);
     expect(hits.length).toBe(6);
@@ -275,7 +293,7 @@ describe('defense', () => {
     expect(blk).toBeDefined();
     expect(blk.chip).toBe(3);
     expect(h.fighter(b.id).health).toBe(997);
-    expect(h.fighter(b.id).guard).toBeLessThan(100);
+    expect(h.fighter(b.id).stamina).toBeLessThan(100);
     expect(h.of('hit').length).toBe(0);
     expect(h.of('parry').length).toBe(0);
   });
@@ -295,9 +313,9 @@ describe('defense', () => {
     expect(h.of('hit').length).toBe(1);
   });
 
-  it('guard breaks when the guard gauge runs out', () => {
+  it('blocking with no stamina left breaks the guard', () => {
     const { a, b, h } = duel(1.2);
-    h.fighter(b.id).guard = 10;
+    h.fighter(b.id).stamina = 10;
     h.step({ [a.id]: { buttons: B.HEAVY }, [b.id]: { buttons: B.BLOCK } });
     h.run(25, { [b.id]: { buttons: B.BLOCK } });
     expect(h.of('guardBreak').length).toBe(1);
@@ -306,18 +324,20 @@ describe('defense', () => {
 
   it('a fully charged haymaker is unblockable', () => {
     const { a, b, h } = duel(1.2);
-    h.run(60, { [a.id]: { buttons: B.HEAVY }, [b.id]: { buttons: B.BLOCK } });
-    h.run(20, { [b.id]: { buttons: B.BLOCK } });
+    const hay = h.sim.chars.striker.moves.haymaker;
+    h.run(hay.charge!.frame + hay.charge!.fullAt + 5, { [a.id]: { buttons: B.HEAVY }, [b.id]: { buttons: B.BLOCK } });
+    h.run(30, { [b.id]: { buttons: B.BLOCK } });
     expect(h.of('hit').length).toBe(1);
     expect(h.of('block').length).toBe(0);
   });
 
   it('parry: pressing block just before impact staggers the attacker', () => {
     const { a, b, h } = duel(1.2);
-    h.step({ [a.id]: { buttons: B.LIGHT } }); // jab active on frame 6
-    h.step();
-    h.step({ [b.id]: { buttons: B.BLOCK } }); // tick 3
-    h.run(5, { [b.id]: { buttons: B.BLOCK } });
+    const jab = h.sim.chars.striker.moves.jab;
+    h.step({ [a.id]: { buttons: B.LIGHT } });
+    h.run(jab.startup - 3);
+    h.step({ [b.id]: { buttons: B.BLOCK } }); // 3 frames before impact
+    h.run(8, { [b.id]: { buttons: B.BLOCK } });
     expect(h.of('parry').length).toBe(1);
     expect(h.fighter(b.id).health).toBe(1000);
     expect(h.fighter(a.id).state).toBe('stagger');
@@ -325,8 +345,9 @@ describe('defense', () => {
 
   it('parry punish: the parried attacker eats a launcher', () => {
     const { a, b, h } = duel(1.2);
+    const hay = h.sim.chars.striker.moves.haymaker;
     h.step({ [a.id]: { buttons: B.HEAVY } });
-    h.run(10);
+    h.run(hay.startup - 4);
     h.step({ [b.id]: { buttons: B.BLOCK } });
     h.until(() => h.of('parry').length > 0, { [b.id]: { buttons: B.BLOCK } });
     h.until(() => h.fighter(b.id).hitstop === 0);
@@ -538,5 +559,44 @@ describe('interactions', () => {
     const hitsOnA = h.of('hit').filter((e) => e.victim === a.id);
     expect(hitsOnA.length).toBe(0);
     expect(h.of('hit').filter((e) => e.attacker === a.id).length).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('stamina', () => {
+  it('running dry exhausts you: no dodging, and the next blocked hit breaks your guard', () => {
+    const { a, b, h } = duel(1.2);
+    h.fighter(b.id).stamina = 5;
+    h.step({ [b.id]: { buttons: B.DODGE } });
+    expect(h.of('exhausted').length).toBe(1);
+    h.until(() => h.fighter(b.id).state === 'ground');
+    h.step({ [b.id]: { buttons: B.DODGE } });
+    expect(h.fighter(b.id).state).not.toBe('dodge');
+    h.fighter(b.id).pos = vec3(0, 0, -1.2); // the first dodge carried b out of reach
+    h.run(12, { [b.id]: { buttons: B.BLOCK } });
+    h.step({ [a.id]: { buttons: B.LIGHT }, [b.id]: { buttons: B.BLOCK } });
+    h.run(20, { [b.id]: { buttons: B.BLOCK } });
+    expect(h.of('guardBreak').length).toBe(1);
+  });
+
+  it('exhausted strikes come out slower', () => {
+    const hitFrame = (exhausted: boolean): number => {
+      const { a, h } = duel(1.2);
+      if (exhausted) {
+        h.fighter(a.id).stamina = 0;
+        h.fighter(a.id).exhausted = true;
+      }
+      h.step({ [a.id]: { buttons: B.LIGHT } });
+      return h.until(() => h.of('hit').length > 0);
+    };
+    expect(hitFrame(true)).toBeGreaterThan(hitFrame(false) + 2);
+  });
+
+  it('stamina comes back once you stop spending', () => {
+    const { a, h } = duel(4);
+    h.step({ [a.id]: { buttons: B.HEAVY } });
+    h.run(5);
+    const low = h.fighter(a.id).stamina;
+    h.run(160);
+    expect(h.fighter(a.id).stamina).toBeGreaterThan(low + 10);
   });
 });

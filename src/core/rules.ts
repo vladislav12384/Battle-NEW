@@ -11,16 +11,16 @@ export const DT = 1 / TICK_RATE;
  */
 export const RULES = {
   /** How long (frames) a button press stays buffered waiting to be used. */
-  inputBuffer: 8,
+  inputBuffer: 10,
 
   // ---------------------------------------------------------------- movement
-  jumpSquat: 3,
+  jumpSquat: 4,
   /** Landing lag after a normal jump. */
-  landingLag: 3,
+  landingLag: 5,
   /** Default landing lag when an aerial attack is interrupted by the ground. */
-  airAttackLandingLag: 8,
+  airAttackLandingLag: 10,
   /** Vertical velocity of a "launcher jump" (jump-cancel after a launcher hits). */
-  highJumpVelocity: 13,
+  highJumpVelocity: 12.5,
 
   // ---------------------------------------------------------------- aiming & control
   // The camera always belongs to the player. Attacks go where you look; aim
@@ -29,7 +29,7 @@ export const RULES = {
   lockOnRange: 25,
   lockOnCone: 60 * DEG,
   /** Max turn speed toward a lock-on target (rad/frame). */
-  lockTurnRate: 14 * DEG,
+  lockTurnRate: 10 * DEG,
   /** Enemies within this cone around the crosshair can receive aim assist. */
   assistCone: 25 * DEG,
   /** Max body correction toward the assisted target (yaw / pitch). */
@@ -38,15 +38,15 @@ export const RULES = {
   /** Extra range on top of a move's reach + lunge for picking the assist target. */
   assistExtraRange: 1.2,
   /** How fast the body follows the camera during an attack's startup, by kind (rad/frame). */
-  turnRate: { light: 30 * DEG, heavy: 14 * DEG, special: 10 * DEG, super: 20 * DEG, throw: 20 * DEG },
+  turnRate: { light: 20 * DEG, heavy: 9 * DEG, special: 8 * DEG, super: 14 * DEG, throw: 14 * DEG },
   /** ...during active frames (you can drag a strike a little)... */
-  activeTurnRate: 5 * DEG,
+  activeTurnRate: 3.5 * DEG,
   /** ...and during recovery. */
-  recoveryTurnRate: 12 * DEG,
+  recoveryTurnRate: 8 * DEG,
   /** Turn speed while blocking or in blockstun: guards can be flanked. */
-  blockTurnRate: 5 * DEG,
+  blockTurnRate: 4 * DEG,
   /** Turn speed while staggered / in hitstun / recoiling. */
-  stunTurnRate: 8 * DEG,
+  stunTurnRate: 6 * DEG,
   /** Step-in budget toward the assisted target during startup, by kind (meters). */
   defaultLunge: { light: 0.7, heavy: 1.0, special: 0.8, super: 3.5, throw: 0.8 },
   /** Holding forward while attacking adds this much step-in. */
@@ -60,9 +60,16 @@ export const RULES = {
   activeMobilityScale: 0.5,
 
   // ---------------------------------------------------------------- free-form combos
-  /** Light/heavy strikes chain into any strike right after their active frames on contact... */
-  /** ...and this many frames later on whiff (lights only; heavies need contact). */
-  flowWhiffDelay: 3,
+  /**
+   * Light/heavy strikes chain into any strike right after their active frames,
+   * but only on contact (hit or block). A strike that hits nothing must play
+   * out its recovery plus a whiff penalty: misses cost time and stamina.
+   */
+  whiffPenalty: { light: 5, heavy: 10, special: 6, super: 0, throw: 0 },
+  /** Overextended after a miss: the body lurches forward (m/s). */
+  whiffStumble: 1.6,
+  /** Extra freeze on a heavy blow that lands as the 3rd+ hit of a combo (finisher weight). */
+  finisherHitstop: 5,
   /** Hits remembered for stale-move tracking. */
   staleWindow: 4,
   /** Hitstun lost per repeat of the same family within the window... */
@@ -80,54 +87,52 @@ export const RULES = {
   /** Half-angle of the guard arc in front of a fighter. Hits from outside it ignore blocks. */
   guardArc: 80 * DEG,
   /** Frames after pressing BLOCK during which an incoming hit is parried. */
-  parryWindow: 7,
+  parryWindow: 9,
   /** Lockout after a whiffed parry window (anti-mash). Holding block still blocks. */
-  parryWhiffCooldown: 20,
-  parryHitstop: 14,
+  parryWhiffCooldown: 30,
+  parryHitstop: 16,
   /** How long a parried attacker is staggered. */
-  parryStagger: 32,
+  parryStagger: 46,
   parryMeter: 30,
-  parryGuardRestore: 10,
   chipRatio: 0.1,
+  /** Stamina drained per blocked hit, as a fraction of its damage (if the hit doesn't say). */
   guardDamageRatio: 0.35,
-  guardRegenDelay: 50,
-  guardRegen: 0.5,
-  guardBreakStagger: 60,
+  guardBreakStagger: 70,
   blockHitstopScale: 0.8,
   blockPushScale: 0.55,
 
   // ---------------------------------------------------------------- evasion
   dodge: {
-    frames: 22,
-    invulnStart: 2,
-    invulnEnd: 12,
-    speed: 11,
+    frames: 28,
+    invulnStart: 3,
+    invulnEnd: 15,
+    speed: 8.5,
     /** Dodging a hit within this many frames of invulnStart is a "perfect dodge". */
-    perfectWindow: 5,
+    perfectWindow: 6,
     /** Each consecutive dodge loses this many invulnerable frames. */
-    chainPenalty: 3,
-    chainReset: 40,
+    chainPenalty: 4,
+    chainReset: 50,
     minInvuln: 3,
   },
-  airDodge: { frames: 20, invulnStart: 1, invulnEnd: 10, speed: 9 },
+  airDodge: { frames: 24, invulnStart: 1, invulnEnd: 12, speed: 7.5 },
   /** Meter cost to cancel any attack into a dodge (escape/extension tool). */
   kiCancelCost: 50,
   perfectDodgeMeter: 25,
 
   // ---------------------------------------------------------------- recovery
-  knockdownFrames: 45,
+  knockdownFrames: 55,
   /** From this frame of a knockdown you may quick-roll out of it. */
-  knockdownTechFrom: 8,
-  getupFrames: 22,
-  techFrames: 20,
-  techRollSpeed: 7,
+  knockdownTechFrom: 10,
+  getupFrames: 26,
+  techFrames: 24,
+  techRollSpeed: 5.5,
   /** Pressing DODGE up to N frames before landing from a juggle = ground tech. */
-  groundTechBuffer: 10,
-  airTechBuffer: 8,
-  throwTechWindow: 14,
-  recoilFrames: 16,
-  recoilCancelFrom: 6,
-  wallSplatFrames: 48,
+  groundTechBuffer: 12,
+  airTechBuffer: 10,
+  throwTechWindow: 18,
+  recoilFrames: 20,
+  recoilCancelFrom: 8,
+  wallSplatFrames: 60,
   /** Minimum speed into a wall for splats/bounces. */
   wallImpactSpeed: 4.5,
   groundBounceVelocity: 7.5,
@@ -146,13 +151,13 @@ export const RULES = {
   /** ...up to this multiplier. */
   comboGravityMax: 1.8,
   /** After this many frames of continuous combo, hitstun starts decaying... */
-  hitstunDecayStart: 150,
+  hitstunDecayStart: 210,
   /** ...by this fraction per second... */
   hitstunDecayPerSecond: 0.12,
   /** ...down to this multiplier. */
   hitstunDecayMin: 0.4,
   counterDamage: 1.2,
-  counterHitstun: 8,
+  counterHitstun: 10,
 
   // ---------------------------------------------------------------- resources
   meterMax: 300,
@@ -162,12 +167,41 @@ export const RULES = {
   burstMax: 100,
   burstRegen: 0.04,
   burstOnDamaged: 0.025,
-  burst: { frames: 32, invulnEnd: 26, activeFrame: 5, radius: 3.8, knockback: 10, up: 6, hitstun: 30 },
+  burst: { frames: 40, invulnEnd: 32, activeFrame: 7, radius: 3.8, knockback: 9, up: 6, hitstun: 40 },
+
+  // ---------------------------------------------------------------- stamina
+  /** Stamina cost to start a move, by kind (MoveDef.stamina overrides). */
+  staminaCost: { light: 9, heavy: 18, special: 14, super: 0, throw: 10 },
+  stamina: {
+    /** Regeneration per frame once the delay is over (~26/s). */
+    regen: 0.43,
+    /** Frames after spending before regeneration starts. */
+    regenDelay: 36,
+    /** Regeneration multiplier while holding block. */
+    blockRegenScale: 0.4,
+    /** Fraction of a move's cost refunded when it lands: accuracy pays. */
+    hitRefund: 0.4,
+    dodge: 16,
+    airDodge: 14,
+    jump: 6,
+    /** Sprinting drain per frame. */
+    sprint: 0.16,
+    /** Restored by a successful parry. */
+    parryRestore: 15,
+    /** Exhaustion ends once stamina is back to this. */
+    recoverAt: 35,
+    /** While exhausted every Nth frame of an action is skipped (slower strikes). */
+    exhaustedSlowEvery: 3,
+    /** Movement speed multiplier while exhausted. */
+    exhaustedMove: 0.6,
+    /** Stamina restored after a guard-break stagger ends (fraction of max). */
+    afterGuardBreak: 0.5,
+  },
 
   // ---------------------------------------------------------------- physics
   /** Horizontal deceleration while sliding in hitstun/blockstun (m/s^2). */
-  stunFriction: 40,
-  knockdownFriction: 30,
+  stunFriction: 30,
+  knockdownFriction: 24,
   koRespawnFrames: 180,
 } as const;
 

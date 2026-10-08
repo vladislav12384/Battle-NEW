@@ -220,11 +220,28 @@ kbd {
   background: var(--lag);
   transition: none;
 }
-.bar.guard .fill {
-  background: var(--guard);
+.bar.stamina {
+  height: 10px;
 }
-.bar.guard.broken .fill {
-  background: #f97316;
+.bar.stamina .fill {
+  background: linear-gradient(90deg, #eab308, #fde047);
+}
+.bar.stamina.low .fill {
+  background: #f59e0b;
+}
+.bar.stamina.exhausted {
+  animation: exhausted 0.5s ease-in-out infinite alternate;
+}
+.bar.stamina.exhausted .fill {
+  background: #ef4444;
+}
+@keyframes exhausted {
+  from {
+    box-shadow: 0 0 0 rgba(239, 68, 68, 0);
+  }
+  to {
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.9);
+  }
 }
 .row {
   display: flex;

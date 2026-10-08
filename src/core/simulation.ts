@@ -141,10 +141,16 @@ export class Simulation implements FighterHost {
 
   private postUpdate(f: FighterState): void {
     const stats = this.statsOf(f);
-    if (f.state !== 'block' && f.state !== 'blockstun' && !f.guardBroken) {
-      if (f.guardRegenDelay > 0) f.guardRegenDelay--;
-      else f.guard = Math.min(stats.maxGuard, f.guard + RULES.guardRegen);
+    // Stamina: regenerates after a short delay; not while attacking, dodging,
+    // sprinting or guard-broken; slowly while blocking.
+    const busy = f.state === 'attack' || f.state === 'dodge' || f.running || f.guardBroken || f.state === 'ko';
+    if (f.staminaDelay > 0) f.staminaDelay--;
+    else if (!busy) {
+      const guarding = f.state === 'block' || f.state === 'blockstun';
+      const rate = RULES.stamina.regen * (guarding ? RULES.stamina.blockRegenScale : 1);
+      f.stamina = Math.min(stats.maxStamina, f.stamina + rate);
     }
+    if (f.exhausted && f.stamina >= RULES.stamina.recoverAt) f.exhausted = false;
     if (f.state !== 'burst' && f.state !== 'ko') f.burst = Math.min(RULES.burstMax, f.burst + RULES.burstRegen);
     if (f.combo.hits > 0 && !COMBO_STATES.has(f.state) && f.hitstop === 0) {
       const c = f.combo;

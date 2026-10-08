@@ -65,15 +65,18 @@ export function createFighterState(
     registry: [],
     charging: false,
     chargeFrames: 0,
+    extraRecovery: 0,
     armorLeft: 0,
     lungeLeft: 0,
     hitstop: 0,
     shake: 0,
     health: stats.maxHealth,
-    guard: stats.maxGuard,
+    stamina: stats.maxStamina,
     meter: 0,
     burst: RULES.burstMax,
-    guardRegenDelay: 0,
+    staminaDelay: 0,
+    exhausted: false,
+    slowAccum: 0,
     guardBroken: false,
     parryWindow: 0,
     parryCooldown: 0,
@@ -117,8 +120,26 @@ export function enterState(f: FighterState, s: StateId, stun = 0): void {
     f.charging = false;
     f.chargeFrames = 0;
     f.armorLeft = 0;
+    f.extraRecovery = 0;
   }
   if (s !== 'ground') f.running = false;
+}
+
+/**
+ * Spends stamina. Running dry makes the fighter exhausted until it
+ * regenerates past RULES.stamina.recoverAt.
+ */
+export function spendStamina(sim: SimContext, f: FighterState, amount: number): void {
+  if (amount <= 0) return;
+  f.stamina -= amount;
+  f.staminaDelay = RULES.stamina.regenDelay;
+  if (f.stamina <= 0) {
+    f.stamina = 0;
+    if (!f.exhausted) {
+      f.exhausted = true;
+      sim.emit({ type: 'exhausted', fighter: f.id });
+    }
+  }
 }
 
 export const isAirborneVictim = (f: FighterState): boolean =>

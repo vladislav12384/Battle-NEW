@@ -105,4 +105,16 @@ describe('content', () => {
   it('all characters pass validation', () => {
     for (const c of Object.values(CHARACTERS)) expect(validateCharacter(c), c.id).toEqual([]);
   });
+
+  it('after re-timing, every grounded punch/kick light still chains into every other as a true combo', () => {
+    const c = CHARACTERS.striker;
+    const lights = Object.values(c.moves).filter((m) => m.kind === 'light' && !m.air && m.hitboxes.length > 0);
+    for (const a of lights) {
+      const hitstun = a.hitboxes[0].hit.hitstun;
+      for (const b of lights) {
+        // Earliest flow frame is right after A's active frames.
+        expect(a.active + b.startup, `${a.id} -> ${b.id}`).toBeLessThanOrEqual(hitstun);
+      }
+    }
+  });
 });

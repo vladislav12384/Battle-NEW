@@ -149,6 +149,15 @@ export function playSequence(
   }
 }
 
+/** A victim that raises its guard the moment it can (block is the instant escape). */
+export const blocker =
+  (id: number) =>
+  (h: Harness): Pad => {
+    const f = h.fighter(id);
+    if (f.combo.hits === 0 && f.state !== 'hitstun' && f.state !== 'block' && f.state !== 'blockstun') return {};
+    return { buttons: Button.BLOCK };
+  };
+
 /** A victim that mashes every escape option once it has been hit. */
 export const escaper =
   (id: number) =>

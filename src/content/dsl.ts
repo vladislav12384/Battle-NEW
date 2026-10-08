@@ -109,3 +109,90 @@ export function mirror(m: MoveDef, id: string, name: string): MoveDef {
     motion: m.motion?.map((mo) => ({ ...mo, side: mo.side === undefined ? undefined : -mo.side })),
   };
 }
+
+export interface TempoScale {
+  startup: number;
+  active: number;
+  recovery: number;
+  hitstun: number;
+  blockstun: number;
+  hitstop: number;
+  landingLag: number;
+}
+
+/**
+ * Re-times a move: scales its startup / active / recovery phases and remaps
+ * every frame reference (hitboxes, cancel windows, root motion, projectiles,
+ * invulnerability, armor, charge) so they stay in the same phase. Root-motion
+ * speeds are rescaled to keep the same distance. Stun and hit stop scale too,
+ * which keeps chains that were true combos true combos.
+ */
+export function tempo(m: MoveDef, k: TempoScale): MoveDef {
+  const s0 = m.startup;
+  const a0 = m.active;
+  const r0 = m.recovery;
+  const s1 = Math.max(1, Math.round(s0 * k.startup));
+  const a1 = Math.max(1, Math.round(a0 * k.active));
+  const r1 = Math.max(1, Math.round(r0 * k.recovery));
+  const start = (x: number): number => {
+    if (x <= s0) return 1 + Math.floor(((x - 1) * s1) / s0);
+    if (x <= s0 + a0) return s1 + 1 + Math.floor(((x - s0 - 1) * a1) / a0);
+    return s1 + a1 + 1 + Math.floor(((x - s0 - a0 - 1) * r1) / r0);
+  };
+  const end = (x: number): number => {
+    if (x <= s0) return Math.round((x * s1) / s0);
+    if (x <= s0 + a0) return s1 + Math.round(((x - s0) * a1) / a0);
+    return s1 + a1 + Math.round(((x - s0 - a0) * r1) / r0);
+  };
+  const range = (r: readonly [number, number]): [number, number] => {
+    const a = start(r[0]);
+    return [a, Math.max(a, end(r[1]))];
+  };
+  const scaleHit = <T extends Partial<HitDef>>(h: T): T => {
+    const out: T = { ...h };
+    if (h.hitstun !== undefined) out.hitstun = Math.round(h.hitstun * k.hitstun);
+    if (h.blockstun !== undefined) out.blockstun = Math.round(h.blockstun * k.blockstun);
+    if (h.hitstop !== undefined) out.hitstop = Math.round(h.hitstop * k.hitstop);
+    else if (h.damage !== undefined) out.hitstop = Math.round(Math.min(16, Math.max(4, 4 + h.damage / 12)) * k.hitstop);
+    if (h.crumple !== undefined) out.crumple = Math.round(h.crumple * k.hitstun);
+    if (h.counter) out.counter = scaleHit(h.counter);
+    return out;
+  };
+  return {
+    ...m,
+    startup: s1,
+    active: a1,
+    recovery: r1,
+    hitboxes: m.hitboxes.map((h) => ({ ...h, frames: range(h.frames), hit: scaleHit(h.hit) })),
+    cancels: m.cancels?.map((c) => ({ ...c, frames: range(c.frames) })),
+    jumpCancel: m.jumpCancel && { ...m.jumpCancel, frames: range(m.jumpCancel.frames) },
+    motion: m.motion?.map((mo) => {
+      const frames = range(mo.frames);
+      const slow = (mo.frames[1] - mo.frames[0] + 1) / (frames[1] - frames[0] + 1);
+      return {
+        ...mo,
+        frames,
+        fwd: mo.fwd === undefined ? undefined : mo.fwd * slow,
+        side: mo.side === undefined ? undefined : mo.side * slow,
+      };
+    }),
+    projectiles: m.projectiles?.map((p) => ({ ...p, frame: start(p.frame), hit: scaleHit(p.hit) })),
+    invuln: m.invuln?.map((i) => ({ ...i, frames: range(i.frames) })),
+    armor: m.armor && { ...m.armor, frames: range(m.armor.frames) },
+    charge: m.charge && {
+      ...m.charge,
+      frame: start(m.charge.frame),
+      maxFrames: Math.round(m.charge.maxFrames * k.recovery),
+      fullAt: Math.round(m.charge.fullAt * k.recovery),
+    },
+    throw: m.throw && { hit: scaleHit(m.throw.hit), recovery: Math.round(m.throw.recovery * k.recovery) },
+    landingLag: m.landingLag === undefined ? undefined : Math.round(m.landingLag * k.landingLag),
+  };
+}
+
+/** Applies `tempo` to every move of a move list. */
+export function tempoMoves(moves: Record<string, MoveDef>, k: TempoScale): Record<string, MoveDef> {
+  const out: Record<string, MoveDef> = {};
+  for (const [id, m] of Object.entries(moves)) out[id] = tempo(m, k);
+  return out;
+}

@@ -71,9 +71,9 @@ describe('bots', () => {
       expect(Math.abs(f.pos.x)).toBeLessThanOrEqual(sim.arena.halfX);
     }
     const count = (t: string) => events.filter((e) => e === t).length;
-    expect(count('hit')).toBeGreaterThan(50);
-    expect(count('block')).toBeGreaterThan(5);
-    expect(count('comboEnd')).toBeGreaterThan(10);
+    expect(count('hit')).toBeGreaterThan(30);
+    expect(count('block')).toBeGreaterThan(2);
+    expect(count('comboEnd')).toBeGreaterThan(8);
   });
 
   it('a parry bot deflects a jab string', () => {

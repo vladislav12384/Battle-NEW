@@ -9,7 +9,7 @@
  *   - Hit stop freezes logic and physics but inputs keep buffering.
  */
 import { pinVictim, resolveHit, throwTech } from './combat';
-import { enterState, releaseGrab } from './fighterUtil';
+import { enterState, releaseGrab, spendStamina } from './fighterUtil';
 import {
   Button,
   buffered,
@@ -61,6 +61,8 @@ export function updateFighter(sim: FighterHost, f: FighterState, input: InputFra
     return;
   }
   tickTimers(f);
+  // Exhausted fighters strike slowly: every Nth frame of an attack is lost.
+  if (f.exhausted && f.state === 'attack' && ++f.slowAccum % RULES.stamina.exhaustedSlowEvery === 0) return;
   f.stateFrame++;
   updateLock(sim, f);
   runState(sim, f, input);
@@ -280,7 +282,7 @@ function tryCommand(sim: FighterHost, f: FighterState, input: InputFrame, filter
 
 function tryGroundActions(sim: FighterHost, f: FighterState, input: InputFrame, allowBlock: boolean): boolean {
   if (tryCommand(sim, f, input)) return true;
-  if (buffered(f.input, Button.DODGE)) {
+  if (buffered(f.input, Button.DODGE) && !f.exhausted) {
     consume(f.input, Button.DODGE);
     startDodge(sim, f, input);
     return true;
@@ -299,7 +301,7 @@ function tryGroundActions(sim: FighterHost, f: FighterState, input: InputFrame, 
 
 function tryAirActions(sim: FighterHost, f: FighterState, input: InputFrame): boolean {
   if (tryCommand(sim, f, input)) return true;
-  if (buffered(f.input, Button.DODGE) && !f.airDodged) {
+  if (buffered(f.input, Button.DODGE) && !f.airDodged && !f.exhausted) {
     consume(f.input, Button.DODGE);
     startDodge(sim, f, input);
     return true;
@@ -309,6 +311,7 @@ function tryAirActions(sim: FighterHost, f: FighterState, input: InputFrame): bo
     const stats = sim.statsOf(f);
     const w = wishDir(f, input);
     f.airJumpsLeft--;
+    spendStamina(sim, f, RULES.stamina.jump);
     f.vel.y = stats.jumpVelocity * 0.9;
     f.vel.x = w.x * stats.airSpeed;
     f.vel.z = w.z * stats.airSpeed;
@@ -323,8 +326,9 @@ function stateGround(sim: FighterHost, f: FighterState, input: InputFrame): void
   if (tryGroundActions(sim, f, input, true)) return;
   const stats = sim.statsOf(f);
   const moving = Math.hypot(input.moveX, input.moveY) > 0.3;
-  if (f.running && !(moving && isHeld(f.input, Button.DODGE))) f.running = false;
-  const speed = f.running ? stats.runSpeed : stats.walkSpeed;
+  if (f.running && !(moving && isHeld(f.input, Button.DODGE) && !f.exhausted)) f.running = false;
+  if (f.running) spendStamina(sim, f, RULES.stamina.sprint);
+  const speed = (f.running ? stats.runSpeed : stats.walkSpeed) * (f.exhausted ? RULES.stamina.exhaustedMove : 1);
   const w = wishDir(f, input);
   accelerateTo(f, w.x * speed, w.z * speed, stats.groundAccel);
 }
@@ -337,6 +341,7 @@ function stateJumpsquat(sim: FighterHost, f: FighterState, input: InputFrame): v
 
 function doJump(sim: FighterHost, f: FighterState, input: InputFrame, high: boolean): void {
   const stats = sim.statsOf(f);
+  if (!high) spendStamina(sim, f, RULES.stamina.jump);
   if (high) {
     const fw = forwardFromYaw(f.yaw);
     f.vel = vec3(fw.x * 1.2, RULES.highJumpVelocity, fw.z * 1.2);
@@ -508,8 +513,9 @@ function stateStagger(sim: FighterHost, f: FighterState, input: InputFrame): voi
     return;
   }
   if (f.guardBroken) {
-    f.guard = sim.statsOf(f).maxGuard;
+    f.stamina = Math.max(f.stamina, sim.statsOf(f).maxStamina * RULES.stamina.afterGuardBreak);
     f.guardBroken = false;
+    f.exhausted = false;
   }
   f.gap = true;
   toNeutral(sim, f, input);
@@ -552,7 +558,8 @@ export function respawnFighter(sim: FighterHost, f: FighterState): void {
   f.yaw = f.spawnYaw;
   f.grounded = f.pos.y <= 0;
   f.health = stats.maxHealth;
-  f.guard = stats.maxGuard;
+  f.stamina = stats.maxStamina;
+  f.exhausted = false;
   f.guardBroken = false;
   f.burst = RULES.burstMax;
   f.koTimer = 0;
@@ -575,6 +582,7 @@ function startDodge(sim: FighterHost, f: FighterState, input: InputFrame): void 
   } else {
     w = vec3(w.x / l, 0, w.z / l);
   }
+  spendStamina(sim, f, air ? RULES.stamina.airDodge : RULES.stamina.dodge);
   if (air) {
     f.dodgeInvulnEnd = RULES.airDodge.invulnEnd;
     f.airDodged = true;
@@ -634,7 +642,10 @@ export function startMove(sim: FighterHost, f: FighterState, id: string): void {
   f.chargeFrames = 0;
   f.charging = false;
   f.armorLeft = m.armor?.hits ?? 0;
+  f.extraRecovery = 0;
+  f.slowAccum = 0;
   f.meter -= m.meterCost ?? 0;
+  spendStamina(sim, f, m.stamina ?? RULES.staminaCost[m.kind]);
   if (m.hand) {
     f.lastHand = m.hand;
     f.handTimer = 0;
@@ -667,10 +678,7 @@ export function chainWindowStart(m: MoveDef, button: number, contact: boolean): 
   const explicit = m.cancels?.find((c) => c.button === button);
   if (explicit) return explicit.frames[0];
   if (button === Button.JUMP && m.jumpCancel) return m.jumpCancel.frames[0];
-  if (flows(m)) {
-    if (contact) return lastActiveFrame(m) + 1;
-    if (m.kind === 'light') return lastActiveFrame(m) + 1 + RULES.flowWhiffDelay;
-  }
+  if (flows(m) && contact) return lastActiveFrame(m) + 1;
   return totalFrames(m) + 1;
 }
 
@@ -704,12 +712,30 @@ function stateAttack(sim: FighterHost, f: FighterState, input: InputFrame): void
   }
   const next = f.moveFrame + 1;
   if (tryCancels(sim, f, m, next, input)) return;
-  if (next > totalFrames(m)) {
+  if (next > totalFrames(m) + f.extraRecovery) {
     finishMove(sim, f, m, input);
     return;
   }
   f.moveFrame = next;
+  if (next === lastActiveFrame(m) + 1) checkWhiff(sim, f, m);
   applyMoveFrame(sim, f, m, input);
+}
+
+/**
+ * A strike whose active frames ended without touching anyone was a miss:
+ * extra recovery, and the body lurches forward (overextended). Misses cost
+ * time, stamina and position.
+ */
+function checkWhiff(sim: FighterHost, f: FighterState, m: MoveDef): void {
+  if (m.hitboxes.length === 0 || f.moveHit || f.moveBlocked || f.registry.length > 0) return;
+  f.extraRecovery = m.whiffPenalty ?? RULES.whiffPenalty[m.kind];
+  if (f.extraRecovery <= 0) return;
+  if (f.grounded) {
+    const fw = forwardFromYaw(f.yaw);
+    f.vel.x += fw.x * RULES.whiffStumble;
+    f.vel.z += fw.z * RULES.whiffStumble;
+  }
+  sim.emit({ type: 'whiff', fighter: f.id, move: m.id });
 }
 
 function finishMove(sim: FighterHost, f: FighterState, m: MoveDef, input: InputFrame): void {
@@ -758,9 +784,8 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
     return true;
   }
 
-  if (flows(m) && frame <= totalFrames(m)) {
-    const from = lastActiveFrame(m) + 1 + (contact ? 0 : m.kind === 'light' ? RULES.flowWhiffDelay : Infinity);
-    if (frame >= from && tryCommand(sim, f, input, isStrike)) return true;
+  if (flows(m) && contact && frame > lastActiveFrame(m) && frame <= totalFrames(m)) {
+    if (tryCommand(sim, f, input, isStrike)) return true;
   }
 
   if (frame > m.startup) {

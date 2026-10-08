@@ -96,6 +96,8 @@ export interface FighterState {
   registry: string[];
   charging: boolean;
   chargeFrames: number;
+  /** Extra recovery added to the current move (whiff penalty). */
+  extraRecovery: number;
   armorLeft: number;
   lungeLeft: number;
 
@@ -105,11 +107,16 @@ export interface FighterState {
   shake: number;
 
   health: number;
-  guard: number;
+  stamina: number;
   meter: number;
   burst: number;
-  guardRegenDelay: number;
-  /** Guard was broken: refill when the stagger ends. */
+  /** Frames until stamina starts regenerating again. */
+  staminaDelay: number;
+  /** Out of stamina: slower attacks and movement, no dodging, any blocked hit breaks the guard. */
+  exhausted: boolean;
+  /** Ticks counter used to slow down actions while exhausted. */
+  slowAccum: number;
+  /** Guard was broken: stamina is partly restored when the stagger ends. */
   guardBroken: boolean;
 
   parryWindow: number;
@@ -205,7 +212,7 @@ export type GameEvent =
       /** Move that landed the hit (null for throws/burst without a move). */
       move: string | null;
     }
-  | { type: 'block'; attacker: number; victim: number; chip: number; guard: number; point: Vec3 }
+  | { type: 'block'; attacker: number; victim: number; chip: number; stamina: number; point: Vec3 }
   | { type: 'parry'; attacker: number; victim: number; point: Vec3 }
   | { type: 'guardBreak'; attacker: number; victim: number; point: Vec3 }
   | { type: 'armor'; attacker: number; victim: number; damage: number; point: Vec3 }
@@ -215,6 +222,8 @@ export type GameEvent =
   | { type: 'super'; fighter: number; move: string }
   | { type: 'kiCancel'; fighter: number }
   | { type: 'feint'; fighter: number }
+  | { type: 'whiff'; fighter: number; move: string }
+  | { type: 'exhausted'; fighter: number }
   | { type: 'jump'; fighter: number; high: boolean }
   | { type: 'land'; fighter: number }
   | { type: 'dodge'; fighter: number }

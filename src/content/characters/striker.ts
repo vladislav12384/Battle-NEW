@@ -18,9 +18,25 @@
 import { Button } from '../../core/input';
 import { DEG } from '../../core/math/vec3';
 import type { CharacterDef, HitDef, MoveDef } from '../../core/types';
-import { box, mirror, moveList, sweep } from '../dsl';
+import { box, mirror, moveList, sweep, type TempoScale, tempoMoves } from '../dsl';
 
 const { LIGHT: L, HEAVY: H, SPECIAL: E, SUPER: R, GRAB: G, KICK: K } = Button;
+
+/**
+ * Global pacing of the character. Moves below are authored at "arcade" speed
+ * and re-timed here: slower wind-ups and recoveries make every strike a
+ * readable commitment, longer stun keeps chains intact, longer hit stop gives
+ * impacts weight.
+ */
+export const STRIKER_TEMPO: TempoScale = {
+  startup: 1.6,
+  active: 1.3,
+  recovery: 1.45,
+  hitstun: 1.5,
+  blockstun: 1.4,
+  hitstop: 1.35,
+  landingLag: 1.3,
+};
 
 /** Keeps an airborne victim floating during air strings. */
 const FLOAT = { fwd: 1, up: 4.6 };
@@ -63,6 +79,7 @@ const jab: MoveDef = {
   id: 'jab',
   name: 'Jab',
   kind: 'light',
+  stamina: 7,
   hand: 'left',
   family: 'straight',
   startup: 5,
@@ -85,6 +102,7 @@ const cross: MoveDef = {
   id: 'cross',
   name: 'Cross',
   kind: 'light',
+  stamina: 8,
   hand: 'right',
   family: 'straight',
   startup: 6,
@@ -108,6 +126,7 @@ const hookL: MoveDef = {
   id: 'hook_l',
   name: 'Left Hook',
   kind: 'light',
+  stamina: 10,
   hand: 'left',
   family: 'hook',
   startup: 7,
@@ -130,6 +149,7 @@ const uppercut: MoveDef = {
   id: 'uppercut',
   name: 'Uppercut',
   kind: 'light',
+  stamina: 10,
   hand: 'right',
   family: 'uppercut',
   startup: 7,
@@ -152,6 +172,7 @@ const bodyBlow: MoveDef = {
   id: 'body_blow',
   name: 'Body Blow',
   kind: 'light',
+  stamina: 10,
   hand: 'left',
   family: 'body',
   startup: 7,
@@ -179,6 +200,7 @@ const haymaker: MoveDef = {
   id: 'haymaker',
   name: 'Haymaker (hold to charge)',
   kind: 'heavy',
+  stamina: 20,
   hand: 'right',
   family: 'power',
   startup: 14,
@@ -211,6 +233,7 @@ const backfist: MoveDef = {
   id: 'spin_backfist',
   name: 'Spinning Backfist',
   kind: 'heavy',
+  stamina: 18,
   hand: 'left',
   family: 'backfist',
   startup: 12,
@@ -233,6 +256,7 @@ const launcher: MoveDef = {
   id: 'rising_uppercut',
   name: 'Rising Uppercut (launcher)',
   kind: 'heavy',
+  stamina: 16,
   hand: 'right',
   family: 'launcher',
   startup: 9,
@@ -257,6 +281,7 @@ const hammer: MoveDef = {
   id: 'hammer',
   name: 'Hammer Fist',
   kind: 'heavy',
+  stamina: 18,
   hand: 'right',
   family: 'hammer',
   startup: 12,
@@ -281,6 +306,7 @@ const dashStraight: MoveDef = {
   id: 'dash_straight',
   name: 'Dash Straight',
   kind: 'heavy',
+  stamina: 20,
   hand: 'right',
   family: 'dash',
   startup: 14,
@@ -310,6 +336,7 @@ const teep: MoveDef = {
   id: 'teep',
   name: 'Push Kick',
   kind: 'light',
+  stamina: 12,
   family: 'teep',
   priority: 2,
   startup: 9,
@@ -336,6 +363,7 @@ const roundhouseR: MoveDef = {
   id: 'roundhouse_r',
   name: 'Roundhouse (right leg)',
   kind: 'heavy',
+  stamina: 18,
   family: 'roundhouse',
   startup: 11,
   active: 3,
@@ -358,6 +386,7 @@ const highKick: MoveDef = {
   id: 'high_kick',
   name: 'Rising High Kick (launcher)',
   kind: 'heavy',
+  stamina: 18,
   family: 'highkick',
   startup: 10,
   active: 3,
@@ -381,6 +410,7 @@ const heelAxe: MoveDef = {
   id: 'heel_axe',
   name: 'Axe Kick (overhead)',
   kind: 'heavy',
+  stamina: 20,
   family: 'axe',
   startup: 13,
   active: 4,
@@ -404,6 +434,7 @@ const legSweep: MoveDef = {
   id: 'sweep',
   name: 'Leg Sweep',
   kind: 'light',
+  stamina: 12,
   family: 'sweep',
   startup: 8,
   active: 4,
@@ -428,6 +459,7 @@ const stomp: MoveDef = {
   id: 'stomp',
   name: 'Stomp (on a downed opponent)',
   kind: 'light',
+  stamina: 8,
   family: 'stomp',
   startup: 8,
   active: 3,
@@ -449,6 +481,7 @@ const flyingKnee: MoveDef = {
   id: 'flying_knee',
   name: 'Flying Knee',
   kind: 'heavy',
+  stamina: 20,
   family: 'knee',
   startup: 10,
   active: 6,
@@ -479,6 +512,7 @@ const airJab: MoveDef = {
   id: 'air_jab',
   name: 'Air Jab',
   kind: 'light',
+  stamina: 6,
   hand: 'left',
   family: 'airstraight',
   air: true,
@@ -505,6 +539,7 @@ const airUpper: MoveDef = {
   id: 'air_upper',
   name: 'Air Uppercut',
   kind: 'light',
+  stamina: 9,
   hand: 'right',
   family: 'airupper',
   air: true,
@@ -531,6 +566,7 @@ const airHammer: MoveDef = {
   id: 'air_hammer',
   name: 'Air Hammer (spike)',
   kind: 'light',
+  stamina: 10,
   hand: 'right',
   family: 'airhammer',
   air: true,
@@ -558,6 +594,7 @@ const axeKick: MoveDef = {
   id: 'axe_kick',
   name: 'Air Axe Kick (spike)',
   kind: 'heavy',
+  stamina: 16,
   family: 'axe',
   air: true,
   startup: 11,
@@ -584,6 +621,7 @@ const airSpin: MoveDef = {
   id: 'air_spin',
   name: 'Air Spin Kick',
   kind: 'light',
+  stamina: 12,
   family: 'airspin',
   priority: 2,
   air: true,
@@ -611,6 +649,7 @@ const diveKick: MoveDef = {
   id: 'dive_kick',
   name: 'Dive Kick',
   kind: 'light',
+  stamina: 12,
   family: 'dive',
   air: true,
   startup: 6,
@@ -638,21 +677,21 @@ export const striker: CharacterDef = {
   color: 0x3d7bfd,
   stats: {
     maxHealth: 1000,
-    maxGuard: 100,
+    maxStamina: 100,
     weight: 1,
     radius: 0.35,
     height: 1.8,
     eyeHeight: 1.65,
-    walkSpeed: 4.4,
-    runSpeed: 8,
-    blockWalkSpeed: 1.8,
-    jumpVelocity: 9.5,
+    walkSpeed: 3.4,
+    runSpeed: 6.6,
+    blockWalkSpeed: 1.3,
+    jumpVelocity: 9,
     airJumps: 1,
-    gravity: 27,
-    maxFallSpeed: 30,
-    airSpeed: 5,
-    groundAccel: 55,
-    airAccel: 18,
+    gravity: 24,
+    maxFallSpeed: 26,
+    airSpeed: 4,
+    groundAccel: 38,
+    airAccel: 13,
   },
 
   // First match wins: most specific first.
@@ -697,7 +736,7 @@ export const striker: CharacterDef = {
     { move: 'air_jab', button: L, air: true },
   ],
 
-  moves: moveList([
+  moves: tempoMoves(moveList([
     jab,
     cross,
     hookL,
@@ -790,6 +829,7 @@ export const striker: CharacterDef = {
       id: 'shoulder_rush',
       name: 'Shoulder Rush (armored)',
       kind: 'special',
+      stamina: 18,
       priority: 3,
       startup: 12,
       active: 10,
@@ -815,6 +855,7 @@ export const striker: CharacterDef = {
       id: 'rising_dragon',
       name: 'Rising Dragon (invincible reversal)',
       kind: 'special',
+      stamina: 20,
       startup: 4,
       active: 9,
       recovery: 28,
@@ -893,5 +934,5 @@ export const striker: CharacterDef = {
       hitboxes: [box([7, 9], [0, 1.2, 0.55], 0.35, throwHit, { throw: true, limb: 'rHand' })],
       throw: { hit: throwHit, recovery: 20 },
     },
-  ]),
+  ]), STRIKER_TEMPO),
 };

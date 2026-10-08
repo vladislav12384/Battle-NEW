@@ -17,7 +17,7 @@ class FighterPanel {
   private name: HTMLDivElement;
   private hp: HTMLDivElement;
   private hpLag: HTMLDivElement;
-  private guard: HTMLDivElement;
+  private stamina: HTMLDivElement;
   private meter: HTMLDivElement[] = [];
   private burst: HTMLDivElement;
   private state: HTMLDivElement;
@@ -29,8 +29,8 @@ class FighterPanel {
     const hpBar = el('div', 'bar hp', this.root);
     this.hpLag = el('div', 'fill lag', hpBar);
     this.hp = el('div', 'fill', hpBar);
-    const gBar = el('div', 'bar guard', this.root);
-    this.guard = el('div', 'fill', gBar);
+    const sBar = el('div', 'bar stamina', this.root);
+    this.stamina = el('div', 'fill', sBar);
     const row = el('div', 'row', this.root);
     const meters = el('div', 'meters', row);
     for (let i = 0; i < 3; i++) {
@@ -52,8 +52,9 @@ class FighterPanel {
     this.name.textContent = `${f.name}${f.team === 0 ? '' : ' ▸ enemy'}`;
     this.hp.style.width = `${hp * 100}%`;
     this.hpLag.style.width = `${this.lag * 100}%`;
-    this.guard.style.width = `${(f.guard / stats.maxGuard) * 100}%`;
-    this.guard.parentElement!.classList.toggle('broken', f.guardBroken);
+    this.stamina.style.width = `${(f.stamina / stats.maxStamina) * 100}%`;
+    this.stamina.parentElement!.classList.toggle('exhausted', f.exhausted || f.guardBroken);
+    this.stamina.parentElement!.classList.toggle('low', f.stamina < stats.maxStamina * 0.3);
     for (let i = 0; i < 3; i++) {
       const v = Math.max(0, Math.min(1, (f.meter - i * 100) / 100));
       this.meter[i].style.width = `${v * 100}%`;

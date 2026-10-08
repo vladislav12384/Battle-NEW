@@ -40,7 +40,7 @@ export interface BotConfig {
 
 export const DEFAULT_BOT: BotConfig = {
   mode: 'fighter',
-  reaction: 14,
+  reaction: 18,
   aggression: 0.5,
   blockChance: 0.55,
   parryChance: 0.15,
@@ -327,6 +327,14 @@ export class Bot {
     if (!actionable && f.state !== 'air') return { held, taps };
     if (this.cooldown > 0) this.cooldown--;
     const dist = hDistance(f.pos, target.pos);
+    const tired = f.exhausted || f.stamina < sim.statsOf(f).maxStamina * 0.25;
+    if (tired && f.state === 'ground' && dist < 3.5) {
+      // Out of breath: back off behind the guard and let stamina recover.
+      out.moveY = -0.8;
+      out.moveX = this.strafe * 0.5;
+      if (dist < 2.2) held |= BLOCK;
+      return { held, taps };
+    }
     const tm = sim.moveOf(target);
     const punishable =
       target.state === 'stagger' ||
@@ -359,9 +367,9 @@ export class Bot {
         this.strafeTimer = 30 + Math.floor(nextRandom(this.rng) * 60);
         this.strafe = chance(this.rng, 0.5) ? 1 : -1;
       }
-      out.moveX = this.strafe * 0.7;
+      out.moveX = this.strafe * 0.5;
       out.moveY = dist > 2.3 ? 0.6 : dist < 1.4 ? -0.6 : 0;
-      if (this.cooldown <= 0 && f.state === 'ground' && chance(this.rng, 0.06 * cfg.aggression)) {
+      if (this.cooldown <= 0 && f.state === 'ground' && chance(this.rng, 0.045 * cfg.aggression)) {
         this.startPlan(this.pickPlan(f, target));
       }
     }
@@ -432,7 +440,7 @@ export class Bot {
     this.stepDir = step.dir ?? 'neutral';
     this.stepDirTimer = 10;
     this.stepSwipe = step.swipe ?? 'none';
-    if (this.plan.length === 0) this.cooldown = 25 + Math.floor(nextRandom(this.rng) * 40);
+    if (this.plan.length === 0) this.cooldown = 40 + Math.floor(nextRandom(this.rng) * 50);
     return step.button;
   }
 

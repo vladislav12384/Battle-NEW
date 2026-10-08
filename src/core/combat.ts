@@ -11,6 +11,7 @@
  */
 import {
   enterState,
+  spendStamina,
   type Invuln,
   invulnerability,
   isAirborneVictim,
@@ -116,7 +117,7 @@ function applyParry(sim: SimContext, ctx: HitContext): HitResult {
   v.parryWindow = 0;
   v.parryCooldown = 0;
   v.meter = Math.min(RULES.meterMax, v.meter + RULES.parryMeter);
-  v.guard = Math.min(vs.maxGuard, v.guard + RULES.parryGuardRestore);
+  v.stamina = Math.min(vs.maxStamina, v.stamina + RULES.stamina.parryRestore);
   v.hitstop = Math.max(v.hitstop, RULES.parryHitstop);
   v.vel.x = 0;
   v.vel.z = 0;
@@ -146,9 +147,10 @@ function applyBlock(sim: SimContext, ctx: HitContext): HitResult {
   const chip = Math.round(hit.chip ?? hit.damage * RULES.chipRatio);
   // Chip damage never kills.
   v.health = Math.max(Math.min(v.health, 1), v.health - chip);
-  v.guard -= hit.guardDamage ?? hit.damage * RULES.guardDamageRatio;
-  v.guardRegenDelay = RULES.guardRegenDelay;
-  if (v.guard <= 0) return applyGuardBreak(sim, ctx);
+  // Blocking costs stamina; running dry (or blocking while exhausted) breaks the guard.
+  const drain = hit.guardDamage ?? hit.damage * RULES.guardDamageRatio;
+  if (v.stamina - drain <= 0) return applyGuardBreak(sim, ctx);
+  spendStamina(sim, v, drain);
 
   enterState(v, 'blockstun', hit.blockstun);
   const push = (hit.blockPush ?? Math.abs(hit.knockback.fwd) * RULES.blockPushScale + 1) / vs.weight;
@@ -162,13 +164,14 @@ function applyBlock(sim: SimContext, ctx: HitContext): HitResult {
     a.moveBlocked = true;
   }
   a.meter = Math.min(RULES.meterMax, a.meter + hit.damage * RULES.meterOnBlock);
-  sim.emit({ type: 'block', attacker: a.id, victim: v.id, chip, guard: v.guard, point: ctx.point });
+  sim.emit({ type: 'block', attacker: a.id, victim: v.id, chip, stamina: v.stamina, point: ctx.point });
   return 'block';
 }
 
 function applyGuardBreak(sim: SimContext, ctx: HitContext): HitResult {
   const { attacker: a, victim: v } = ctx;
-  v.guard = 0;
+  v.stamina = 0;
+  v.staminaDelay = RULES.guardBreakStagger;
   v.guardBroken = true;
   enterState(v, 'stagger', RULES.guardBreakStagger);
   const dir = horizontalAway(ctx.from, v.pos);
@@ -297,7 +300,9 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
     hardKnockdown: !!hit.hardKnockdown,
   };
 
-  const stop = defaultHitstop(hit) + (counter ? 3 : 0);
+  // Heavy blows that land deep in a combo get extra weight (finisher freeze).
+  const finisher = c.hits >= 3 && (ctx.move?.kind === 'heavy' || launches) && ctx.source === 'strike';
+  const stop = defaultHitstop(hit) + (counter ? 3 : 0) + (finisher ? RULES.finisherHitstop : 0);
   let ko = false;
   if (v.health <= 0) {
     v.health = 0;
@@ -321,6 +326,11 @@ function applyHit(sim: SimContext, ctx: HitContext): HitResult {
   v.hitstop = Math.max(v.hitstop, stop);
   v.shake = stop;
 
+  // Accuracy pays: a strike that lands refunds part of its stamina cost (once per move).
+  if (ctx.move && !a.moveHit && (ctx.source === 'strike' || ctx.source === 'projectile')) {
+    const cost = ctx.move.stamina ?? RULES.staminaCost[ctx.move.kind];
+    a.stamina = Math.min(sim.statsOf(a).maxStamina, a.stamina + cost * RULES.stamina.hitRefund);
+  }
   if (ctx.source === 'strike') {
     a.hitstop = Math.max(a.hitstop, stop);
     a.moveHit = true;

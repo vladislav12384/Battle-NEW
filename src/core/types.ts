@@ -29,7 +29,7 @@ export interface HitDef {
   damage: number;
   /** Damage dealt through a block (defaults to damage * RULES.chipRatio). Never lethal. */
   chip?: number;
-  /** Guard gauge damage when blocked (defaults to damage * RULES.guardDamageRatio). */
+  /** Stamina drained from a blocking victim (defaults to damage * RULES.guardDamageRatio). */
   guardDamage?: number;
   hitstun: number;
   blockstun: number;
@@ -191,6 +191,10 @@ export interface MoveDef {
   cancels?: CancelDef[];
   jumpCancel?: { frames: [number, number]; on: 'hit' | 'contact'; high?: boolean };
   meterCost?: number;
+  /** Stamina spent to start the move (defaults by kind, RULES.staminaCost). Partly refunded on hit. */
+  stamina?: number;
+  /** Extra recovery frames when the move hits nothing (defaults by kind, RULES.whiffPenalty). */
+  whiffPenalty?: number;
   /** Clash priority: equal priorities both recoil, otherwise the stronger wins. */
   priority?: number;
   landingLag?: number;
@@ -220,7 +224,8 @@ export interface CommandDef {
 
 export interface CharacterStats {
   maxHealth: number;
-  maxGuard: number;
+  /** Stamina: spent by attacks, dodges, jumps, sprinting and blocked hits. */
+  maxStamina: number;
   /** Knockback is divided by weight (heavier = harder to launch and juggle). */
   weight: number;
   radius: number;
