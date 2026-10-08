@@ -60,7 +60,7 @@ kbd {
   display: none;
 }
 .card {
-  max-width: 880px;
+  max-width: 1200px;
   max-height: 96vh;
   overflow-y: auto;
   padding: 28px 36px;
@@ -747,4 +747,488 @@ kbd {
 /* Callouts move below the lesson card while it is shown. */
 .hud.tutorial .callouts {
   top: 38%;
+}
+
+/* ---------------------------------------------------------------- hero cards */
+.tcard {
+  --c: #ff3b30;
+  --glow: rgba(255, 59, 48, 0.55);
+  --soft: rgba(255, 59, 48, 0.16);
+  position: relative;
+  width: 260px;
+  height: 392px;
+  perspective: 1200px;
+  color: #f3f4f8;
+  text-align: left;
+}
+.tc-in {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+.tc-face,
+.tc-back {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  backface-visibility: hidden;
+  overflow: hidden;
+  border: 2px solid var(--c);
+}
+.tc-face {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 12px;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.07), transparent 38%),
+    radial-gradient(120% 60% at 50% 0%, var(--soft), transparent 70%),
+    linear-gradient(180deg, #1b1d28, #0c0d13);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 24px var(--glow), 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+.tc-back {
+  transform: rotateY(180deg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.035) 0 8px, transparent 8px 16px),
+    radial-gradient(circle, var(--soft), #0c0d13 72%);
+  box-shadow: 0 0 24px var(--glow);
+}
+.tc-emblem {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  border: 3px solid var(--c);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 56px;
+  font-weight: 900;
+  color: var(--c);
+  text-shadow: 0 0 18px var(--glow);
+  box-shadow: inset 0 0 30px var(--glow), 0 0 20px var(--glow);
+}
+.tc-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.tc-hero {
+  color: var(--c);
+  text-shadow: 0 0 10px var(--glow);
+}
+.tc-rar {
+  color: #9aa3b8;
+}
+.tcard.rare .tc-rar {
+  color: #7dd3fc;
+}
+.tcard.legendary .tc-rar {
+  color: #fde047;
+}
+.tc-art {
+  position: relative;
+  flex: 0 0 124px;
+  margin: 8px 0 8px;
+  border-radius: 10px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 36% 48%, rgba(255, 70, 40, 0.3), transparent 60%),
+    linear-gradient(180deg, #180b0d, #07070b);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.tc-name {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.12;
+  letter-spacing: 0.3px;
+}
+.tc-lines {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 1.38;
+  color: #c9cfdc;
+}
+.tc-lines li {
+  position: relative;
+  padding-left: 11px;
+}
+.tc-lines li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 6px var(--c);
+}
+.tc-lines kbd {
+  padding: 0 4px;
+  font-size: 10.5px;
+}
+.tc-flavor {
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 10.5px;
+  font-style: italic;
+  line-height: 1.4;
+  color: #8f97aa;
+}
+.tc-shine {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 36%, rgba(255, 255, 255, 0.2) 48%, transparent 60%);
+  transform: translateX(-130%);
+  animation: tcshine 4s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+@keyframes tcshine {
+  0%,
+  58% {
+    transform: translateX(-130%);
+  }
+  88%,
+  100% {
+    transform: translateX(130%);
+  }
+}
+.tc-initial {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 72px;
+  font-weight: 900;
+  color: var(--c);
+}
+
+/* Art: Cyclops — the visor glows, the beam fires. */
+.tc-rays {
+  position: absolute;
+  inset: -60%;
+  background: repeating-conic-gradient(from 0deg at 50% 50%, rgba(255, 90, 60, 0.15) 0 5deg, transparent 5deg 15deg);
+  animation: spin 26s linear infinite;
+}
+.tc-cyclops {
+  position: absolute;
+  left: 26px;
+  top: 18px;
+  width: 92px;
+  height: 108px;
+}
+.tc-skull {
+  position: absolute;
+  inset: 0;
+  border-radius: 48% 48% 42% 42% / 54% 54% 46% 46%;
+  background: radial-gradient(circle at 38% 28%, #3b4466, #151a2c 72%);
+  box-shadow: inset -7px -9px 16px rgba(0, 0, 0, 0.6), 0 0 22px rgba(0, 0, 0, 0.7);
+}
+/* The lower face under the cowl, with a set mouth. */
+.tc-jaw {
+  position: absolute;
+  left: 21%;
+  right: 21%;
+  bottom: 3px;
+  height: 36%;
+  border-radius: 12% 12% 48% 48% / 12% 12% 64% 64%;
+  background: linear-gradient(180deg, #d4a07c, #a46f4e);
+  box-shadow: inset 0 -7px 10px rgba(0, 0, 0, 0.35), inset 0 6px 8px rgba(0, 0, 0, 0.3);
+}
+.tc-jaw::after {
+  content: '';
+  position: absolute;
+  left: 30%;
+  right: 30%;
+  top: 50%;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(70, 30, 18, 0.75);
+}
+.tc-visor {
+  position: absolute;
+  left: -9px;
+  right: -15px;
+  top: 34px;
+  height: 25px;
+  border-radius: 12px 15px 15px 12px;
+  background: linear-gradient(180deg, #cfa64a, #8a6a24 45%, #5b4515);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.75);
+}
+.tc-visor i {
+  position: absolute;
+  left: 9px;
+  right: 7px;
+  top: 8px;
+  height: 9px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #ff3b30, #ffd8cc 58%, #ff3b30);
+  box-shadow: 0 0 10px #ff3b30, 0 0 26px #ff2a10, 0 0 48px rgba(255, 40, 16, 0.75);
+  animation: tcvisor 1.9s ease-in-out infinite;
+}
+.tc-beam {
+  position: absolute;
+  left: 126px;
+  top: 55px;
+  width: 150px;
+  height: 13px;
+  border-radius: 7px;
+  transform-origin: left center;
+  background: linear-gradient(90deg, #fff 0%, #ffd2c6 16%, #ff3b30 46%, rgba(255, 59, 48, 0));
+  box-shadow: 0 0 14px #ff3b30, 0 0 34px rgba(255, 40, 16, 0.85);
+  animation: tcbeam 1.9s ease-in-out infinite;
+}
+@keyframes tcvisor {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  30%,
+  48% {
+    filter: brightness(1.9);
+  }
+}
+@keyframes tcbeam {
+  0%,
+  32% {
+    transform: scaleX(0);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  52% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  80%,
+  100% {
+    transform: scaleX(1.06);
+    opacity: 0;
+  }
+}
+
+/* Reveal: the card flips open in the middle of the screen, then flies into the corner. */
+.cardreveal {
+  position: absolute;
+  left: 50%;
+  top: 47%;
+  width: 260px;
+  height: 392px;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  perspective: 1400px;
+}
+.cardreveal.on {
+  animation: cardreveal 3.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+.cardreveal.on .tc-in {
+  animation: cardflip 1.15s cubic-bezier(0.3, 1.35, 0.45, 1) both;
+}
+.cardreveal .burst {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 760px;
+  height: 760px;
+  margin: -380px 0 0 -380px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 90, 60, 0.5), rgba(255, 60, 30, 0.12) 38%, transparent 62%);
+  opacity: 0;
+}
+.cardreveal .burst::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: repeating-conic-gradient(rgba(255, 140, 110, 0.22) 0 4deg, transparent 4deg 14deg);
+  -webkit-mask: radial-gradient(circle, #000 18%, transparent 62%);
+  mask: radial-gradient(circle, #000 18%, transparent 62%);
+  animation: spin 12s linear infinite;
+}
+.cardreveal.on .burst {
+  animation: cardburst 3.4s ease-out forwards;
+}
+@keyframes cardflip {
+  0% {
+    transform: rotateY(540deg) scale(0.45);
+  }
+  100% {
+    transform: rotateY(0deg) scale(1);
+  }
+}
+@keyframes cardreveal {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translateY(60px);
+  }
+  7% {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+  76% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) translate(-42vw, 36vh) scale(0.18);
+  }
+}
+@keyframes cardburst {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  22% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.1);
+  }
+}
+
+/* The equipped card in the corner. */
+.cardbadge {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 8px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 59, 48, 0.45);
+  box-shadow: 0 0 16px rgba(255, 59, 48, 0.22);
+  font-size: 12px;
+}
+.cardbadge.on {
+  display: flex;
+}
+.tc-mini {
+  position: relative;
+  flex: 0 0 34px;
+  height: 47px;
+  border-radius: 5px;
+  border: 1.5px solid var(--c);
+  background: radial-gradient(circle at 50% 40%, var(--soft), #0d0e14);
+  box-shadow: 0 0 10px var(--glow);
+}
+.tc-mini i {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  top: 19px;
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ff3b30, #ffd6c8, #ff3b30);
+  box-shadow: 0 0 8px #ff3b30;
+}
+.tc-badge-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.4;
+}
+.tc-badge-text b {
+  font-size: 13px;
+}
+.tc-badge-text span {
+  color: var(--muted);
+}
+.tc-badge-text .keys {
+  color: #e2e8f0;
+}
+
+/* Seen from inside Cyclops' visor while the eyes charge and fire. */
+.visor {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 40, 20, 0.6) 0%, rgba(255, 40, 20, 0.14) 13%, transparent 25%, transparent 75%, rgba(255, 40, 20, 0.14) 87%, rgba(255, 40, 20, 0.6) 100%),
+    radial-gradient(ellipse at center, transparent 42%, rgba(255, 30, 20, 0.38) 100%);
+  mix-blend-mode: screen;
+}
+
+.movelist .mlcard {
+  margin: 8px 0 6px;
+  padding: 4px 14px 6px;
+  border-left: 3px solid var(--c);
+  border-radius: 6px;
+  background: rgba(255, 59, 48, 0.07);
+}
+.movelist .mlcard h3 {
+  color: var(--c);
+}
+.movelist .mlcard small {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Start screen: the card slot next to the rules. */
+.startgrid {
+  display: grid;
+  grid-template-columns: 1fr 272px;
+  gap: 30px;
+  align-items: start;
+}
+.startcard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.startcard h3 {
+  margin: 0 !important;
+}
+#cardslot .tcard {
+  cursor: pointer;
+  transition: transform 0.25s, filter 0.3s;
+}
+#cardslot .tcard:hover {
+  transform: translateY(-5px) rotate(-1deg);
+}
+.startcard.off #cardslot .tcard {
+  filter: grayscale(0.9) brightness(0.62);
+}
+#cardtoggle {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 59, 48, 0.55);
+  background: rgba(255, 59, 48, 0.16);
+  color: #ffe1dc;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.startcard.off #cardtoggle {
+  border-color: rgba(125, 211, 252, 0.3);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+@media (max-width: 1080px) {
+  .startgrid {
+    grid-template-columns: 1fr;
+  }
 }

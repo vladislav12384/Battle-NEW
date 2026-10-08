@@ -11,6 +11,24 @@ const taperGeo = new THREE.CylinderGeometry(0.78, 1, 1, 14, 1);
 const sphereGeo = new THREE.SphereGeometry(1, 20, 14);
 const roundBox = new RoundedBoxGeometry(1, 1, 1, 3, 0.28);
 
+let eyeTex: THREE.Texture | null = null;
+/** Soft round glow for the eyes (shared). */
+function eyeTexture(): THREE.Texture {
+  if (eyeTex) return eyeTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d')!;
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.3, 'rgba(255,255,255,0.6)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 64, 64);
+  eyeTex = new THREE.CanvasTexture(c);
+  eyeTex.colorSpace = THREE.SRGBColorSpace;
+  return eyeTex;
+}
+
 /** core local (x right, y up, z forward) -> three.js local (x right, y up, -z forward). */
 export const toThree = (p: V3, out = new THREE.Vector3()): THREE.Vector3 => out.set(p.x, p.y, -p.z);
 
@@ -33,6 +51,10 @@ export class FighterView {
   private readonly head: THREE.Mesh;
   private readonly hair: THREE.Mesh;
   private readonly visor: THREE.Mesh;
+  private readonly visorMat: THREE.MeshStandardMaterial;
+  /** Glow in front of the visor (eye beams charging). */
+  private readonly eyes: THREE.Sprite;
+  private eyeGlow = 0;
   private readonly fists: THREE.Mesh[] = [];
   private readonly wraps: THREE.Mesh[] = [];
   private readonly feet: THREE.Mesh[] = [];
@@ -122,12 +144,14 @@ export class FighterView {
     this.head.castShadow = true;
     this.hair = new THREE.Mesh(sphereGeo, mat(0x23180f, 0.9));
     this.hair.scale.set(0.12 * b.s, 0.1 * b.s, 0.128 * b.s);
-    this.visor = new THREE.Mesh(
-      roundBox,
-      new THREE.MeshStandardMaterial({ color: 0x0c0c10, emissive: color, emissiveIntensity: 0.7, roughness: 0.3 }),
-    );
+    this.visorMat = new THREE.MeshStandardMaterial({ color: 0x0c0c10, emissive: color, emissiveIntensity: 0.7, roughness: 0.3 });
+    this.visor = new THREE.Mesh(roundBox, this.visorMat);
     this.visor.scale.set(0.2 * b.s, 0.045 * b.s, 0.06 * b.s);
-    this.root.add(this.head, this.hair, this.visor);
+    this.eyes = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: eyeTexture(), color: new THREE.Color().setRGB(4, 0.5, 0.3), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }),
+    );
+    this.eyes.visible = false;
+    this.root.add(this.head, this.hair, this.visor, this.eyes);
 
     this.aura = new THREE.Mesh(
       sphereGeo,
@@ -158,6 +182,16 @@ export class FighterView {
     group.position.copy(this.root.position);
     group.quaternion.copy(this.root.quaternion);
     return { group, mat };
+  }
+
+  /**
+   * Visor light: color and intensity (Cyclops' ruby visor burns brighter while
+   * the eye beam charges). `glow` 0..1 lights the eyes up in front of it.
+   */
+  setVisor(color: number, intensity: number, glow = 0): void {
+    this.visorMat.emissive.set(color);
+    this.visorMat.emissiveIntensity = intensity;
+    this.eyeGlow = glow;
   }
 
   /** Brief flash when hit (stronger for heavy blows, red on counter hits). */
@@ -251,6 +285,10 @@ export class FighterView {
     this.visor.position.copy(this.head.position).add(new THREE.Vector3(0, 0.015, -0.105 * b.s).applyEuler(this.head.rotation));
     this.visor.rotation.copy(this.head.rotation);
     for (const m of [this.head, this.hair, this.visor]) m.visible = !firstPerson;
+    this.eyes.position.copy(this.head.position).add(new THREE.Vector3(0, 0.015, -0.16 * b.s).applyEuler(this.head.rotation));
+    this.eyes.scale.set(0.12 + this.eyeGlow * 0.55, 0.06 + this.eyeGlow * 0.3, 1);
+    (this.eyes.material as THREE.SpriteMaterial).opacity = Math.min(1, this.eyeGlow * 1.4);
+    this.eyes.visible = !firstPerson && this.eyeGlow > 0.02;
 
     // Hit flash and energy glow.
     this.flashT = Math.max(0, this.flashT - dt * 12);

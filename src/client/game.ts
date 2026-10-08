@@ -3,22 +3,24 @@
  * renderer and all presentation (FX, audio, HUD). Training-mode sandbox.
  */
 import * as THREE from 'three';
-import { CHARACTERS } from '../content';
+import { CARDS, cardCharId, CHARACTERS } from '../content';
 import { Bot, type BotLevel, type BotMode } from '../core/ai/bot';
 import { chargeRatio } from '../core/combat';
 import { type InputFrame } from '../core/input';
 import { aimedPoint, chestHeight, chestPos, movePitch, moveReach, strikeLine } from '../core/moves';
-import { hDistance, vec3, wrapAngle, yawFromDir, yawTo } from '../core/math/vec3';
+import { DEG, hDistance, vec3, wrapAngle, yawFromDir, yawTo } from '../core/math/vec3';
 import { DEFAULT_ARENA } from '../core/physics';
 import { DT, RULES } from '../core/rules';
 import { Simulation } from '../core/simulation';
-import type { FighterState, GameEvent } from '../core/state';
+import type { FighterState, GameEvent, ProjectileState } from '../core/state';
+import type { MoveDef } from '../core/types';
 import { Audio } from './audio';
 import { Hud, type ThreatMark } from './hud';
 import { Coach, moveName, nextStrikes, onBeatWindow, Tutorial } from './tutorial';
 import { InputDevice } from './input';
 import { FighterView, toThree } from './render/fighterView';
 import { Fx } from './render/fx';
+import { OpticFx } from './render/optic';
 import {
   advanceWalk,
   animate,
@@ -60,6 +62,12 @@ interface ViewEntry {
   ghostFrame: number;
   /** Squash & stretch of the whole body on impact. */
   squash: Spring;
+  /** Body color (the visor glows in it unless it is Cyclops' ruby visor). */
+  color: number;
+  /** The recoil's floor blast of the current move has been shown. */
+  opticDone: boolean;
+  /** Airborne last tick (landing of a recoil). */
+  wasAir: boolean;
 }
 
 interface Ghost {
@@ -97,12 +105,20 @@ export interface GameOptions {
   demoMode?: BotMode;
   /** Difficulty of enemy bots. */
   level?: BotLevel;
+  /** Hero card the player starts with (id from CARDS). */
+  card?: string | null;
 }
+
+/** Whether a move is one of Cyclops' eye blasts (charges the visor). */
+const isOptic = (m: MoveDef | null | undefined): boolean => m?.vfx === 'optic' || m?.vfx === 'opticFloor';
+/** Frame on which an optic move lets the beam out. */
+const opticFireFrame = (m: MoveDef): number => m.projectiles?.[0]?.frame ?? m.startup + 1;
 
 export class Game {
   sim!: Simulation;
   readonly world: World;
   readonly fx: Fx;
+  readonly optic: OpticFx;
   readonly hud: Hud;
   readonly audio = new Audio();
   readonly input: InputDevice;
@@ -120,6 +136,8 @@ export class Game {
     hints: true,
     allies: 0,
     enemies: 1,
+    /** Equipped hero card (null = none). */
+    card: null as string | null,
   };
   paused = true;
   private time = 0;
@@ -147,6 +165,12 @@ export class Game {
   scriptedInput: ((tick: number, game: Game) => Partial<InputFrame>) | null = null;
   /** Called when the difficulty is changed in game (to remember it). */
   onLevelChange: ((level: BotLevel) => void) | null = null;
+  /** Called when a card is equipped or taken off in game. */
+  onCardChange: ((card: string | null) => void) | null = null;
+  /** Visor charge of the local player's eyes (0..1) and the flash of a shot, for the HUD. */
+  private visorCharge = 0;
+  private visorFlash = 0;
+  private readonly opticChars = new Map<string, boolean>();
   /** Debug/tooling hook: overrides the camera after it has been placed. */
   cameraOverride: ((camera: THREE.PerspectiveCamera, game: Game) => void) | null = null;
   private scriptTick = 0;
@@ -158,6 +182,7 @@ export class Game {
   ) {
     this.world = new World(canvas, DEFAULT_ARENA);
     this.fx = new Fx(this.world.scene);
+    this.optic = new OpticFx(this.world.scene, this.fx, DEFAULT_ARENA);
     this.hud = new Hud(hudRoot);
     this.input = new InputDevice(canvas);
     this.settings.thirdPerson = !!opts.thirdPerson;
@@ -166,8 +191,9 @@ export class Game {
     this.settings.allies = opts.allies ?? 0;
     if (opts.dummyMode) this.settings.dummyMode = opts.dummyMode;
     if (opts.level) this.settings.level = opts.level;
-    this.hud.buildMoveList(CHARACTERS.striker);
+    if (opts.card && CARDS[opts.card]) this.settings.card = opts.card;
     this.resetScenario();
+    this.showCard();
     window.addEventListener('resize', () => this.world.resize());
     window.addEventListener('keydown', (e) => this.onKey(e));
   }
@@ -179,7 +205,7 @@ export class Game {
     this.views.clear();
     this.bots.clear();
     this.sim = new Simulation(CHARACTERS, { respawn: true, seed: 1234, arena: DEFAULT_ARENA });
-    const p = this.sim.addFighter({ charId: 'striker', team: 0, pos: vec3(0, 0, 5), yaw: 0, name: 'You' });
+    const p = this.sim.addFighter({ charId: this.playerChar(), team: 0, pos: vec3(0, 0, 5), yaw: 0, name: 'You' });
     this.playerId = p.id;
     this.input.yaw = 0;
     this.input.pitch = 0;
@@ -207,6 +233,35 @@ export class Game {
     bot.setLevel(enemy ? this.settings.level : 'normal');
     if (enemy) bot.setMode(this.settings.dummyMode);
     this.bots.set(f.id, bot);
+  }
+
+  /** The character the player fights as: Striker, with the equipped card plugged in. */
+  private playerChar(): string {
+    const c = this.settings.card;
+    return c && CARDS[c] ? cardCharId('striker', [c]) : 'striker';
+  }
+
+  /**
+   * Equips a hero card (null takes it off). The fight goes on: only the
+   * moveset changes. `reveal` plays the card reveal.
+   */
+  equipCard(id: string | null, reveal = true): void {
+    this.settings.card = id && CARDS[id] ? id : null;
+    const me = this.player;
+    if (me) me.charId = this.playerChar();
+    this.showCard();
+    const card = this.settings.card ? CARDS[this.settings.card] : null;
+    if (card && reveal) {
+      this.hud.cardReveal(card);
+      this.audio.play('card');
+    } else if (!card) this.hud.callout('Карта убрана', 'info');
+    this.onCardChange?.(this.settings.card);
+  }
+
+  private showCard(): void {
+    const card = this.settings.card ? CARDS[this.settings.card] : null;
+    this.hud.buildMoveList(CHARACTERS[this.playerChar()], card);
+    this.hud.cardBadge(card);
   }
 
   /** Starts the tutorial course from the first lesson. */
@@ -352,6 +407,9 @@ export class Game {
       case 'KeyH':
         this.hud.toggleMoveList();
         break;
+      case 'KeyC':
+        this.equipCard(this.settings.card ? null : Object.keys(CARDS)[0]);
+        break;
     }
   }
 
@@ -399,6 +457,9 @@ export class Game {
           tell: null,
           ghostFrame: -1,
           squash: new Spring(0),
+          color,
+          opticDone: false,
+          wasAir: !f.grounded,
         };
         e.mem.lastX = f.pos.x;
         e.mem.lastZ = f.pos.z;
@@ -437,6 +498,7 @@ export class Game {
     }
     this.trackAdvantage(events);
     for (const e of events) this.present(e);
+    this.opticTick();
     this.tutorialTick(events);
     const tip = this.settings.hints && !this.tutorial ? this.coach.update(sim, this.player, events, this.threatHeavy) : null;
     this.tipText = tip?.text ?? null;
@@ -484,6 +546,113 @@ export class Game {
     return { x: ((v.x + 1) / 2) * window.innerWidth, y: ((1 - v.y) / 2) * window.innerHeight };
   }
 
+  /** Where a fighter's eyes are (for the local first-person player: just under the camera). */
+  private eyesOf(f: FighterState): THREE.Vector3 {
+    if (f.id === this.playerId && !this.settings.thirdPerson) {
+      const cam = this.world.camera;
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+      const down = new THREE.Vector3(0, -1, 0).applyQuaternion(cam.quaternion);
+      // From the bottom of the view the beam reads as a ray converging on the crosshair.
+      return cam.position.clone().addScaledVector(fwd, 0.5).addScaledVector(down, 0.3);
+    }
+    const e = this.views.get(f.id);
+    if (e?.joints) {
+      const head = e.view.root.localToWorld(toThree(e.joints.head));
+      return head.add(new THREE.Vector3(-Math.sin(f.yaw), 0.01, -Math.cos(f.yaw)).multiplyScalar(0.14));
+    }
+    return new THREE.Vector3(f.pos.x, f.pos.y + this.sim.statsOf(f).eyeHeight, f.pos.z);
+  }
+
+  /** Whether a character has Cyclops' visor (any eye-beam move). */
+  private hasVisor(charId: string): boolean {
+    let v = this.opticChars.get(charId);
+    if (v === undefined) {
+      v = Object.values(CHARACTERS[charId]?.moves ?? {}).some((m) => m.vfx === 'optic');
+      this.opticChars.set(charId, v);
+    }
+    return v;
+  }
+
+  /** A fighter's eyes let an optic bolt out. */
+  private fireBeam(p: ProjectileState, ownerId: number): void {
+    const owner = this.sim.fighter(ownerId);
+    const eyes = owner ? this.eyesOf(owner) : this.worldPoint(p.prevPos);
+    const mine = ownerId === this.playerId;
+    // Seen from our own eyes the beam is thinner: it leaves from just under the view.
+    this.optic.fire(p.id, ownerId, eyes, this.worldPoint(p.pos), mine && !this.settings.thirdPerson ? 0.5 : 1);
+    this.audio.play('optic', owner ? this.nearCamera(owner.pos) * 1.1 : 1);
+    if (mine) {
+      // The blast pushes the head back: the view kicks up, the screen flashes red.
+      this.visorFlash = 0.6;
+      this.hud.flash('rgba(255,70,40,1)', 0.07);
+      this.kick.pitch += 0.022;
+      this.kick.fov -= 4;
+      this.fx.shake(0.12);
+    }
+    if (!mine || this.settings.thirdPerson) {
+      this.fx.flash(eyes, 0xff3a24, 0.7, 0.12);
+      this.fx.ring(eyes, 0xff6a50, 0.7, 0.16);
+    }
+  }
+
+  /** The recoil's shot into the floor (its first active frame). */
+  private floorBlast(f: FighterState, m: MoveDef): void {
+    const eyes = this.eyesOf(f);
+    const pitch = (m.air ? -62 : -52) * DEG;
+    const dir = new THREE.Vector3(-Math.sin(f.yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(f.yaw) * Math.cos(pitch));
+    const at = eyes.clone().addScaledVector(dir, Math.min(10, eyes.y / -dir.y)).setY(0);
+    const back = new THREE.Vector3(Math.sin(f.yaw), 0, Math.cos(f.yaw));
+    const fp = f.id === this.playerId && !this.settings.thirdPerson;
+    this.optic.floorBlast(eyes, at, back, fp ? 0.45 : 1);
+    this.audio.play('opticFloor', this.nearCamera(f.pos) * 1.2);
+    if (f.id === this.playerId) {
+      this.visorFlash = 0.6;
+      this.kick.fov += 9;
+      this.kick.pitch += 0.045;
+      this.fx.shake(0.35);
+      this.hud.flash('rgba(255,90,60,1)', 0.12);
+      if (fp) this.hud.impact(window.innerWidth / 2, window.innerHeight * 0.7, 0.55, 'rgba(255,150,120,0.6)');
+    } else if (hDistance(f.pos, this.world.camera.position) < 8) this.fx.shake(0.12);
+  }
+
+  /** Per-tick presentation of Cyclops' moves: floor blasts, recoil flight, landing skid. */
+  private opticTick(): void {
+    for (const f of this.sim.state.fighters) {
+      const e = this.views.get(f.id);
+      if (!e) continue;
+      const m = f.state === 'attack' ? this.sim.moveOf(f) : null;
+      const recoil = m?.vfx === 'opticFloor' ? m : null;
+      if (recoil) {
+        const fire = opticFireFrame(recoil);
+        if (f.moveFrame < fire) e.opticDone = false;
+        else if (!e.opticDone) {
+          e.opticDone = true;
+          this.floorBlast(f, recoil);
+        }
+        const me = f.id === this.playerId;
+        const fp = me && !this.settings.thirdPerson;
+        if (f.moveFrame > fire && !f.grounded) {
+          // Thrown back: afterimages trail the body, our own view widens with the speed.
+          if (!fp && f.moveFrame % 4 === 0) this.spawnGhost(e, 0xff5a3a, 0.3, 0.28);
+          if (me) this.kick.fov = Math.max(this.kick.fov, 7);
+        }
+        const speed = Math.hypot(f.vel.x, f.vel.z);
+        if (f.grounded && e.wasAir && f.moveFrame > fire) {
+          // Touchdown: boots bite into the floor.
+          const feet = new THREE.Vector3(f.pos.x, 0.06, f.pos.z);
+          this.fx.spark(feet, { color: 0xa09484, count: 22, speed: 3, size: 0.2, gravity: 3, life: 0.7, dir: new THREE.Vector3(0, 0.5, 0), spread: 1 });
+          this.fx.shock(feet, new THREE.Vector3(0, 1, 0), 0xc8beb0, 1.8, 0.3, 0.45);
+          this.audio.play('land', this.nearCamera(f.pos) * 1.3);
+          if (me) this.fx.shake(0.2);
+        } else if (f.grounded && speed > 2.5 && f.moveFrame > fire) {
+          const feet = new THREE.Vector3(f.pos.x, 0.05, f.pos.z);
+          this.fx.spark(feet, { color: 0x9a8f86, count: 2, speed: 1.5, size: 0.18, gravity: 2, life: 0.5, dir: new THREE.Vector3(-f.vel.x / speed, 0.6, -f.vel.z / speed), spread: 0.6 });
+        }
+      } else e.opticDone = false;
+      e.wasAir = !f.grounded;
+    }
+  }
+
   private reactToHit(victimId: number, attackerId: number, dir: { x: number; y: number; z: number }, point: { y: number }, strength: number): void {
     const v = this.sim.fighter(victimId);
     const ve = this.views.get(victimId);
@@ -508,8 +677,9 @@ export class Game {
       case 'hit': {
         const at = this.worldPoint(e.point);
         const heavy = e.effect === 'heavy' || e.effect === 'launch' || e.effect === 'spike' || e.effect === 'throw' || e.damage >= 60;
-        const color = e.effect === 'energy' ? 0x66ccff : e.effect === 'burst' ? 0xffffff : e.counter ? 0xff4444 : 0xffc04d;
         const attacker = this.sim.fighter(e.attacker);
+        const optic = !!attacker && !!e.move && this.sim.moveById(attacker.charId, e.move)?.vfx === 'optic';
+        const color = optic ? 0xff4a2a : e.effect === 'energy' ? 0x66ccff : e.effect === 'burst' ? 0xffffff : e.counter ? 0xff4444 : 0xffc04d;
         const dir = attacker ? new THREE.Vector3(at.x - attacker.pos.x, 0.3, at.z - attacker.pos.z).normalize() : undefined;
         const victim = this.sim.fighter(e.victim);
         const head = !!victim && e.point.y - victim.pos.y > chestHeight(this.sim.statsOf(victim)) + 0.05;
@@ -528,6 +698,12 @@ export class Game {
           fx.shock(at, kdir, e.counter ? 0xff7070 : 0xffffff, heavy ? 2.6 : 1.8, 0.3);
           fx.shock(at.clone().addScaledVector(kdir, 0.35), kdir, color, heavy ? 1.7 : 1.2, 0.22, 0.6);
         }
+        if (optic) {
+          // Burnt: molten sparks thrown along the beam, a sizzle.
+          fx.spark(at, { color: 0xff8a50, count: 26, speed: 7, size: 0.08, gravity: 7, dir: kdir, spread: 0.7, life: 0.55 });
+          fx.shock(at, kdir, 0xff5a30, 1.9, 0.26, 0.8);
+          sfx.play('sizzle', this.nearCamera(at));
+        }
         if (head && (heavy || e.counter)) {
           // Spit / sweat spray flying with the blow.
           fx.spark(at, { color: 0xdcecff, count: 14, speed: 4.5, size: 0.05, gravity: 9, dir: kdir, spread: 0.5, life: 0.5 });
@@ -541,7 +717,7 @@ export class Game {
         sfx.play(heavy ? 'hitHeavy' : 'hitLight', this.nearCamera(at) * (heavy ? 1.2 : 1));
         sfx.play(head ? 'slap' : 'thump', this.nearCamera(at) * (heavy ? 1.2 : 0.8));
         if (heavy || e.counter || e.hitstop >= 14) sfx.play('boom', this.nearCamera(at) * Math.min(1.4, e.force / 8 + 0.4));
-        this.views.get(e.victim)?.view.hitFlash(heavy ? 1.7 : 1, e.counter ? 0xff4a4a : 0xffd9b3);
+        this.views.get(e.victim)?.view.hitFlash(heavy || optic ? 1.7 : 1, e.counter ? 0xff4a4a : optic ? 0xff6040 : 0xffd9b3);
         // Weight of the hit for presentation: knockback force, freeze length, counter.
         const power = Math.min(1.6, e.force / 10 + e.hitstop / 20 + (e.counter ? 0.5 : 0));
         const mine = e.attacker === me || e.victim === me;
@@ -701,7 +877,8 @@ export class Game {
       case 'attack': {
         const f = this.sim.fighter(e.fighter);
         const m = f ? this.sim.moveById(f.charId, e.move) : null;
-        if (f) sfx.play(m && m.kind !== 'light' ? 'whooshHeavy' : 'whoosh', this.nearCamera(f.pos) * 0.8);
+        if (f && isOptic(m)) sfx.play('opticCharge', this.nearCamera(f.pos));
+        else if (f) sfx.play(m && m.kind !== 'light' ? 'whooshHeavy' : 'whoosh', this.nearCamera(f.pos) * 0.8);
         if (e.fighter === me && m) {
           hud.strike(moveName(m.id, m.name), f?.stringPos ?? 1);
           if (f && f.rhythm === 0) hud.rhythm(0);
@@ -815,20 +992,47 @@ export class Game {
         hud.callout(e.fighter === me ? 'YOU WERE K.O.' : 'K.O.', 'red big');
         fx.shake(0.6);
         break;
-      case 'projectile':
-        sfx.play('blast', 0.8);
+      case 'projectile': {
+        const p = this.sim.state.projectiles.find((x) => x.id === e.id);
+        if (p && this.sim.moveById(p.charId, p.moveId)?.vfx === 'optic') this.fireBeam(p, e.owner);
+        else sfx.play('blast', 0.8);
         break;
-      case 'projectileEnd':
-        fx.spark(this.worldPoint(e.point), { color: 0x88ddff, count: 12, speed: 4, size: 0.1 });
+      }
+      case 'projectileEnd': {
+        const at = this.worldPoint(e.point);
+        if (!this.optic.has(e.id)) {
+          fx.spark(at, { color: 0x88ddff, count: 12, speed: 4, size: 0.1 });
+          break;
+        }
+        // A beam that hit a fighter just burns out; one that hit a surface scorches it.
+        const along = this.optic.direction(e.id);
+        const surface = this.nearFighter(at, this.optic.ownerOf(e.id)) ? null : this.optic.surfaceAt(at);
+        this.optic.end(e.id, surface?.point ?? at);
+        this.optic.impact(surface?.point ?? at, surface?.normal ?? null, along);
+        if (surface) sfx.play('sizzle', this.nearCamera(at) * 1.2);
         break;
-      case 'reflect':
+      }
+      case 'reflect': {
         hud.callout('REFLECT!', 'cyan');
+        // A parried beam: it now leaves from the parry.
+        const p = this.sim.state.projectiles.find((x) => x.id === e.id);
+        if (p && this.optic.has(e.id)) this.optic.fire(p.id, e.fighter, this.worldPoint(p.pos), this.worldPoint(p.pos));
         break;
+      }
       case 'respawn':
       case 'jump':
       case 'grab':
         break;
     }
+  }
+
+  /** Whether a point is on (or right next to) a fighter's body, other than `except`. */
+  private nearFighter(p: { x: number; y: number; z: number }, except: number): boolean {
+    return this.sim.state.fighters.some((f) => {
+      if (f.id === except) return false;
+      const s = this.sim.statsOf(f);
+      return Math.hypot(p.x - f.pos.x, p.z - f.pos.z) < s.radius + 0.6 && p.y > f.pos.y - 0.3 && p.y < f.pos.y + s.height + 0.4;
+    });
   }
 
   // ------------------------------------------------------------------ render
@@ -889,6 +1093,17 @@ export class Game {
         }
       }
       e.pose = pose;
+      // Cyclops' ruby visor burns brighter as the eyes charge, flares on the shot.
+      const cm = f.state === 'attack' ? sim.moveOf(f) : null;
+      let charge = 0;
+      if (cm && isOptic(cm)) {
+        const fire = opticFireFrame(cm);
+        const fr = f.moveFrame + (f.hitstop > 0 ? 0 : frac);
+        charge = fr < fire ? (fr / fire) ** 1.6 : Math.max(0, 1 - (fr - fire) / 12);
+      }
+      if (this.hasVisor(f.charId)) e.view.setVisor(0xff2814, 1.6 + charge * 9, charge);
+      else e.view.setVisor(e.color, 0.7);
+      if (isMe) this.visorCharge = charge;
       const joints = solveSkeleton(stats, pose);
       e.joints = joints;
       e.view.update(joints, pose, fp, dt);
@@ -948,6 +1163,11 @@ export class Game {
     const shake = this.fx.update(dt);
     this.updateCamera(me, headWorld, meJoints, shake, dt);
     this.cameraOverride?.(this.world.camera, this);
+    this.trackBeams(frac);
+    this.optic.update(dt, this.world.camera.position);
+    // Seen from inside the visor: a red glow at the edges while the eyes charge and fire.
+    this.visorFlash = Math.max(0, this.visorFlash - dt * 4);
+    this.hud.visor(firstPerson && me ? Math.max(this.visorCharge * 0.6, this.visorFlash) : 0);
     const threats = me && me.state !== 'ko' ? this.computeThreats(me) : [];
     this.threatHeavy = threats.some((t) => t.kind !== 'light');
     this.hud.threats(threats);
@@ -994,6 +1214,26 @@ export class Game {
       advantageKind: this.advResult?.kind ?? '',
     }, dt);
     this.world.render();
+  }
+
+  /** Live beams follow their bolts; while the shooter still fires the tail stays on its eyes. */
+  private trackBeams(frac: number): void {
+    const sim = this.sim;
+    const alive = new Set<number>();
+    for (const p of sim.state.projectiles) {
+      if (!this.optic.has(p.id)) continue;
+      alive.add(p.id);
+      const tip = new THREE.Vector3(
+        p.prevPos.x + (p.pos.x - p.prevPos.x) * frac,
+        p.prevPos.y + (p.pos.y - p.prevPos.y) * frac,
+        p.prevPos.z + (p.pos.z - p.prevPos.z) * frac,
+      );
+      const owner = p.reflected ? undefined : sim.fighter(p.owner);
+      const om = owner?.state === 'attack' ? sim.moveOf(owner) : null;
+      const firing = !!owner && om?.vfx === 'optic' && owner.moveFrame <= opticFireFrame(om) + om.active + 1;
+      this.optic.track(p.id, tip, firing && owner ? this.eyesOf(owner) : null);
+    }
+    this.optic.prune(alive);
   }
 
   private spawnGhost(e: ViewEntry, color: number, opacity: number, life: number): void {

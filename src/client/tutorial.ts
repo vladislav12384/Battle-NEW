@@ -49,6 +49,9 @@ export const MOVE_NAMES: Record<string, string> = {
   rising_dragon: 'Восходящий дракон',
   barrage: 'Сто кулаков',
   grab: 'Бросок',
+  optic_blast: 'Оптический выстрел',
+  optic_recoil: 'Отлёт',
+  optic_recoil_air: 'Отлёт в воздухе',
 };
 
 export const moveName = (id: string | null | undefined, fallback = ''): string =>

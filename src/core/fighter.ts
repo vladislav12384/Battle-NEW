@@ -277,6 +277,8 @@ function findCommand(
   const air = !f.grounded;
   for (const cmd of sim.charCommands(f)) {
     if (!buffered(f.input, cmd.button)) continue;
+    // Moves on the dash button replace dashes: out of reach while exhausted, like a dash.
+    if (cmd.button === Button.DODGE && f.exhausted) continue;
     if (cmd.air !== undefined && cmd.air !== air) continue;
     if (cmd.seq && (seq < cmd.seq[0] || seq > cmd.seq[1])) continue;
     if (cmd.dir && cmd.dir !== dir) continue;
@@ -286,6 +288,7 @@ function findCommand(
     if (cmd.context === 'targetDown' && !enemyDownInFront(sim, f)) continue;
     const m = sim.moveById(f.charId, cmd.move);
     if (!m || (m.meterCost ?? 0) > f.meter) continue;
+    if (m.usesAirDash && air && f.airDodged) continue;
     if (filter && !filter(m)) continue;
     return cmd;
   }
@@ -732,6 +735,7 @@ export function startMove(sim: FighterHost, f: FighterState, id: string, seq = 1
   f.onBeat = false;
   f.rhythm = 0;
   f.meter -= m.meterCost ?? 0;
+  if (m.usesAirDash && !f.grounded) f.airDodged = true;
   spendStamina(sim, f, m.stamina ?? RULES.staminaCost[m.kind]);
   if (m.hand) {
     f.lastHand = m.hand;
@@ -908,6 +912,7 @@ function tryCancels(sim: FighterHost, f: FighterState, m: MoveDef, frame: number
  * The camera itself is never touched.
  */
 function steer(sim: FighterHost, f: FighterState, m: MoveDef, input: InputFrame): void {
+  if (m.fixedFacing) return;
   const fr = f.moveFrame;
   const rate =
     fr <= m.startup || f.charging

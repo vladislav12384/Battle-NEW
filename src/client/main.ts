@@ -1,5 +1,7 @@
 import './style.css';
+import { CARDS } from '../content';
 import type { BotLevel, BotMode } from '../core/ai/bot';
+import { cardHtml } from './cardView';
 import { Game } from './game';
 
 const LEVEL_KEY = 'battle.level';
@@ -20,6 +22,30 @@ function saveLevel(level: BotLevel): void {
   }
 }
 
+const CARD_KEY = 'battle.card';
+/** The remembered card: an id, 'none', or null when never chosen. */
+function savedCard(): string | null {
+  try {
+    return localStorage.getItem(CARD_KEY);
+  } catch {
+    return null;
+  }
+}
+function saveCard(card: string | null): void {
+  try {
+    localStorage.setItem(CARD_KEY, card ?? 'none');
+  } catch {
+    // storage unavailable: the choice just isn't remembered
+  }
+}
+/** ?card=<id> / ?card=none, else the remembered choice; the first card is on by default. */
+function initialCard(param: string | null): string | null {
+  const pick = param ?? savedCard();
+  if (pick === 'none') return null;
+  if (pick && CARDS[pick]) return pick;
+  return Object.keys(CARDS)[0] ?? null;
+}
+
 const params = new URLSearchParams(location.search);
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ui = document.getElementById('ui') as HTMLElement;
@@ -35,6 +61,7 @@ const game = new Game(canvas, ui, {
   dummyMode: (params.get('dummy') as BotMode | null) ?? undefined,
   demoMode: (params.get('demo') as BotMode | null) || undefined,
   level: (isLevel(params.get('level')) ? (params.get('level') as BotLevel) : null) ?? savedLevel() ?? 'normal',
+  card: initialCard(params.get('card')),
 });
 (window as unknown as { game: Game }).game = game;
 
@@ -55,6 +82,26 @@ showLevel(game.settings.level);
 game.onLevelChange = (level) => {
   saveLevel(level);
   showLevel(level);
+};
+
+// The hero card on the start screen: click the card or the button to take it / put it back.
+const firstCard = Object.values(CARDS)[0];
+const startCard = document.getElementById('startcard') as HTMLElement;
+const cardToggle = document.getElementById('cardtoggle') as HTMLButtonElement;
+(document.getElementById('cardslot') as HTMLElement).innerHTML = firstCard ? cardHtml(firstCard) : '';
+function showStartCard(card: string | null): void {
+  startCard.classList.toggle('off', !card);
+  cardToggle.textContent = card ? '✓ Карта в бою — убрать' : 'Взять карту в бой';
+}
+function toggleCard(): void {
+  game.equipCard(game.settings.card ? null : (firstCard?.id ?? null), false);
+}
+cardToggle.addEventListener('click', toggleCard);
+startCard.querySelector('.tcard')?.addEventListener('click', toggleCard);
+showStartCard(game.settings.card);
+game.onCardChange = (card) => {
+  saveCard(card);
+  showStartCard(card);
 };
 
 function begin(): void {

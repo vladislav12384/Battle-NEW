@@ -222,6 +222,18 @@ export interface MoveDef {
    * 'spinBackfist'...). Derived from the limb and the trajectory when omitted.
    */
   anim?: string;
+  /** Effects hint for the client ('optic' = eye beam...). The simulation ignores it. */
+  vfx?: string;
+  /**
+   * Takes the place of the air dash: in the air it can be used once per jump
+   * and it uses up the air dash (movement specials like a recoil blast).
+   */
+  usesAirDash?: boolean;
+  /**
+   * The body keeps the facing the move started with (recoils, lunges): root
+   * motion goes where the move was aimed while the camera stays free.
+   */
+  fixedFacing?: boolean;
   cancels?: CancelDef[];
   jumpCancel?: { frames: [number, number]; on: 'hit' | 'contact'; high?: boolean };
   meterCost?: number;

@@ -572,7 +572,8 @@ function attackPose(p: Pose, f: FighterState, stats: CharacterStats, b: Body, mo
   const frame = f.charging ? f.moveFrame : f.moveFrame + fr;
   if (strikePose(p, f, stats, b, move, frame, strikeLine(move), firstPerson, time)) {
     const feetUsed = move.hitboxes.some((h) => h.limb === 'lFoot' || h.limb === 'rFoot');
-    if (move.anim !== 'dragon') airFeet(p, f, b, move, feetUsed);
+    // These styles place the feet themselves (corkscrew, recoil flight).
+    if (move.anim !== 'dragon' && move.anim !== 'opticRecoil') airFeet(p, f, b, move, feetUsed);
     if (move.kind === 'super') p.glow = Math.max(p.glow, 0.8);
     return;
   }

@@ -25,7 +25,12 @@ export type Sfx =
   | 'poise'
   | 'impact'
   | 'slap'
-  | 'thump';
+  | 'thump'
+  | 'opticCharge'
+  | 'optic'
+  | 'opticFloor'
+  | 'sizzle'
+  | 'card';
 
 export class Audio {
   private ctx: AudioContext | null = null;
@@ -203,6 +208,39 @@ export class Audio {
       case 'blast':
         this.tone('sawtooth', 220, 880, 0.12, 0.25);
         this.hiss('bandpass', 2400, 2, 0.2, 0.25, 600);
+        break;
+      case 'opticCharge':
+        // The visor powers up: a thin rising whine.
+        this.tone('sine', 520, 2100, 0.07 * k, 0.26);
+        this.tone('triangle', 1040, 3600, 0.03 * k, 0.24, 0.03);
+        this.hiss('bandpass', 3000, 3, 0.05 * k, 0.24, 7000);
+        break;
+      case 'optic':
+        // Eye beam: a hard, bright zap with a punch under it.
+        this.tone('sawtooth', 2200, 240, 0.16 * k, 0.2);
+        this.tone('square', 1100, 140, 0.08 * k, 0.16);
+        this.tone('sine', 150, 50, 0.45 * k, 0.22);
+        this.hiss('highpass', 3500, 0.6, 0.22 * k, 0.12, 9000);
+        break;
+      case 'opticFloor':
+        // Beam into the floor: zap, blast, debris.
+        this.tone('sawtooth', 1900, 200, 0.14 * k, 0.18);
+        this.tone('sine', 90, 30, 0.85 * k, 0.5);
+        this.hiss('lowpass', 3200, 0.6, 0.5 * k, 0.45, 160);
+        this.hiss('bandpass', 1800, 0.8, 0.18 * k, 0.6, 400);
+        break;
+      case 'card':
+        // A card flips open: a bright shimmer and a low swell.
+        this.tone('sine', 660, 1320, 0.12, 0.35);
+        this.tone('sine', 990, 1980, 0.08, 0.4, 0.08);
+        this.tone('triangle', 1320, 2640, 0.06, 0.5, 0.16);
+        this.tone('sine', 110, 220, 0.25, 0.6);
+        this.hiss('highpass', 6000, 0.5, 0.08, 0.6, 12000);
+        break;
+      case 'sizzle':
+        // A scorched surface hissing.
+        this.hiss('highpass', 4200, 0.7, 0.16 * k, 0.4, 2400);
+        this.tone('triangle', 700, 300, 0.05 * k, 0.12);
         break;
     }
   }

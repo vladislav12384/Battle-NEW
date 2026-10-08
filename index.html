@@ -11,6 +11,8 @@
     <div id="ui"></div>
     <div id="start" class="overlay">
       <div class="card">
+        <div class="startgrid">
+        <div class="startmain">
         <h1>BATTLE <span>combat sandbox</span></h1>
         <p class="lead">Тренировочный полигон боевой системы: физика, комбо, защита, выходы из комбо.</p>
         <div class="cols">
@@ -20,7 +22,7 @@
             (джеб → кросс → хук → апперкот…). Кольцо у прицела = «жми сейчас». Закликивание ломает серию.<br />
             <kbd>ПКМ</kbd> — мощный удар. Сразу — хеймейкер (держи, чтобы зарядить), в конце серии — добивание:
             чем длиннее серия, тем мощнее (круговой, бэкфист, подброс, топор)<br />
-            <kbd>ЛКМ</kbd>+<kbd>ПКМ</kbd> вместе — бросок · <kbd>E</kbd> — ки (полная шкала — супер)</p>
+            <kbd>ЛКМ</kbd>+<kbd>ПКМ</kbd> вместе — бросок · <kbd>E</kbd> — ки, с картой Циклопа — луч (полная шкала — супер)</p>
             <h3>Движение</h3>
             <p><kbd>WASD</kbd> + мышь · <kbd>Space</kbd> прыжок · <kbd>Shift</kbd> рывок (держать — бег)</p>
           </div>
@@ -45,6 +47,14 @@
           <button id="play">Кликни, чтобы начать</button>
         </div>
         <p class="hint">Esc — пауза. Геймпад: X/Y — атаки, A — прыжок, B — рывок, RB — блок, RT — ки.</p>
+        </div>
+        <div class="startcard" id="startcard">
+          <h3>Карта героя</h3>
+          <div id="cardslot"></div>
+          <button id="cardtoggle"></button>
+          <p class="hint"><kbd>C</kbd> в игре — взять / снять · <kbd>H</kbd> — все приёмы</p>
+        </div>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/client/main.ts"></script>

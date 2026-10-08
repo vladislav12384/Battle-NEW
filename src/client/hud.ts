@@ -3,6 +3,8 @@ import { RULES } from '../core/rules';
 import type { Simulation } from '../core/simulation';
 import type { FighterState } from '../core/state';
 import type { CharacterDef } from '../core/types';
+import type { CardDef } from '../content';
+import { cardBadgeHtml, cardHtml } from './cardView';
 import { MOVE_NAMES } from './tutorial';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', parent?: HTMLElement): HTMLElementTagNameMap[K] => {
@@ -116,6 +118,10 @@ export class Hud {
   private readonly flashEl: HTMLDivElement;
   private readonly tiredEl: HTMLDivElement;
   private readonly witchEl: HTMLDivElement;
+  private readonly visorEl: HTMLDivElement;
+  private readonly badgeEl: HTMLDivElement;
+  private readonly revealEl: HTMLDivElement;
+  private revealTimer = 0;
   private readonly lines: HTMLCanvasElement;
   private readonly numbers: HTMLDivElement;
   private impacts: { x: number; y: number; t: number; max: number; power: number; color: string; seed: number }[] = [];
@@ -138,6 +144,7 @@ export class Hud {
     this.vignette = el('div', 'vignette', this.root);
     this.tiredEl = el('div', 'tired', this.root);
     this.witchEl = el('div', 'witch', this.root);
+    this.visorEl = el('div', 'visor', this.root);
     this.flashEl = el('div', 'screenflash', this.root);
     this.numbers = el('div', 'numbers', this.root);
     this.player = new FighterPanel(this.root, 'left');
@@ -154,7 +161,33 @@ export class Hud {
     this.comboInfo = el('div', 'info', this.combo);
     this.callouts = el('div', 'callouts', this.root);
     this.training = el('div', 'training', this.root);
+    this.badgeEl = el('div', 'cardbadge', this.root);
+    this.revealEl = el('div', 'cardreveal', this.root);
     this.moveList = el('div', 'movelist hidden', this.root);
+  }
+
+  /** Red glow of Cyclops' visor at the edges of the view (0 = off). */
+  visor(level: number): void {
+    this.visorEl.style.opacity = level > 0.01 ? String(Math.min(1, level)) : '0';
+  }
+
+  /** The equipped card in the corner (null hides it). */
+  cardBadge(card: CardDef | null): void {
+    this.badgeEl.classList.toggle('on', !!card);
+    this.badgeEl.innerHTML = card ? cardBadgeHtml(card) : '';
+  }
+
+  /** The card flips open in the middle of the screen, then flies into its corner. */
+  cardReveal(card: CardDef): void {
+    clearTimeout(this.revealTimer);
+    this.revealEl.innerHTML = `<div class="burst"></div>${cardHtml(card)}`;
+    this.revealEl.classList.remove('on');
+    void this.revealEl.offsetWidth;
+    this.revealEl.classList.add('on');
+    this.revealTimer = window.setTimeout(() => {
+      this.revealEl.classList.remove('on');
+      this.revealEl.innerHTML = '';
+    }, 3400);
   }
 
   callout(text: string, cls = ''): void {
@@ -468,10 +501,21 @@ export class Hud {
       <div><kbd>V</kbd> камера: <b>${info.thirdPerson ? '3-е лицо' : '1-е лицо'}</b> · <kbd>H</kbd> приёмы</div>`;
   }
 
-  buildMoveList(c: CharacterDef): void {
+  buildMoveList(c: CharacterDef, card: CardDef | null = null): void {
     const name = (id: string): string => MOVE_NAMES[id] ?? c.moves[id]?.name ?? id;
+    const cardPart = card
+      ? `<div class="mlcard" style="--c:#${card.color.toString(16).padStart(6, '0')}">
+          <h3>Карта: ${card.name} <small>${card.hero}</small></h3>
+          <ul>${card.lines.map((l) => `<li>${l}</li>`).join('')}</ul>
+          <p class="hint"><kbd>C</kbd> — снять карту</p>
+        </div>`
+      : '<p class="hint"><kbd>C</kbd> — взять карту героя (Циклоп: оптический выстрел)</p>';
+    const special = card
+      ? `<kbd>E</kbd> — ${name('optic_blast').toLowerCase()} (карта), <kbd>W</kbd>+<kbd>E</kbd> — таран плечом, <kbd>S</kbd>+<kbd>E</kbd> — восходящий дракон`
+      : '<kbd>E</kbd> — волна ки, <kbd>W</kbd>+<kbd>E</kbd> — таран плечом, <kbd>S</kbd>+<kbd>E</kbd> — восходящий дракон (неуязвимый выход из-под атаки)';
     this.moveList.innerHTML = `
       <h2>${c.name} — как драться</h2>
+      ${cardPart}
       <p>Две кнопки атаки. Какой удар выйдет, зависит от того, <b>сколько ударов уже попало подряд</b>.
       Жми следующий удар в момент попадания (кольцо у прицела) — это ритм. Закликивание ломает связку.</p>
       <h3>ЛКМ — руки, серия в ритм</h3>
@@ -492,7 +536,7 @@ export class Hud {
         <li>Бег (держи <kbd>Shift</kbd>) + <kbd>ЛКМ</kbd> — летящее колено, + <kbd>ПКМ</kbd> — удар с разбега</li>
         <li>Враг лежит перед тобой — любая атака добивает</li>
         <li><kbd>ЛКМ</kbd> + <kbd>ПКМ</kbd> вместе — бросок (пробивает блок)</li>
-        <li><kbd>E</kbd> — волна ки, <kbd>W</kbd>+<kbd>E</kbd> — таран плечом, <kbd>S</kbd>+<kbd>E</kbd> — восходящий дракон (неуязвимый выход из-под атаки). Полная шкала ки — <kbd>E</kbd> выпускает супер</li>
+        <li>${special}. Полная шкала ки — <kbd>E</kbd> выпускает супер</li>
         <li>В воздухе: <kbd>ЛКМ</kbd> — серия, <kbd>ПКМ</kbd> — удар вниз, <kbd>S</kbd>+<kbd>ПКМ</kbd> — удар ногой в пике</li>
       </ul>
       <h3>Защита</h3>

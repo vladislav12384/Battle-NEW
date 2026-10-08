@@ -116,6 +116,8 @@ interface Ctx {
   /** Seen from inside (local first-person player): no spins, nothing in the eyes. */
   fp: boolean;
   time: number;
+  /** Body spring stiffness the style asks for (overrides the phase default). */
+  stiff?: number;
 }
 
 /** Beat timing of a style (tau of each pose). */
@@ -681,6 +683,103 @@ function dragon(c: Ctx): void {
   set(c, 'glow', tr([[0, 0], [1, 0.4], [1.5, 1], [2.6, 0.6], [3, 0]], c.tau));
 }
 
+/** Two fingers to the visor (seen from inside the hand goes up past the edge of the view). */
+const visorHand = (c: Ctx): V3 =>
+  c.fp ? v(0.45 * c.b.w, 1.75 * c.b.s, -0.05 * c.b.s) : v(0.13 * c.b.w, 1.66 * c.b.s, 0.1 * c.b.s);
+
+/**
+ * Optic blast: two fingers to the visor, square up and focus (chin down, the
+ * eyes charge), then the beam leaves and the blast throws the head and the
+ * shoulders back. The first-person view only takes a small kick.
+ */
+function optic(c: Ctx): void {
+  const { p, g, b, fp } = c;
+  const at = 1.98;
+  const kick = 2.12;
+  const temple = visorHand(c);
+  const brace = fp ? v(-0.15 * b.w, 1.36 * b.s, 0.44 * b.s) : v(-0.17 * b.w, 1.3 * b.s, 0.34 * b.s);
+  const back = v(0, 0.025, -0.07);
+  p.rHand = path([[0, g.rHand], [0.62, temple], [at, temple, lin], [kick, add(temple, back), easeOut], [2.5, temple], [3, g.rHand]], c.tau);
+  p.lHand = path([[0, g.lHand], [0.7, brace], [at, brace, lin], [kick, add(brace, mul(back, 1.4)), easeOut], [2.5, brace], [3, g.lHand]], c.tau);
+  set(c, 'rElbow', tr([[0, 0], [0.62, 1], [2.6, 1], [3, 0]], c.tau));
+  set(c, 'lElbow', tr([[0, 0], [0.7, -0.3], [2.6, -0.3], [3, 0]], c.tau));
+  set(c, 'twist', tr([[0, g.twist], [0.62, 0.02], [2.6, 0.06], [3, g.twist]], c.tau));
+  set(c, 'lean', tr([[0, g.lean], [0.62, fp ? 0.1 : 0.15], [at, fp ? 0.11 : 0.17, lin], [kick, fp ? -0.04 : -0.15, easeOut], [2.5, 0], [3, g.lean]], c.tau));
+  set(c, 'headPitch', tr([[0, g.headPitch], [0.62, g.headPitch + (fp ? 0.02 : 0.1)], [at, g.headPitch + (fp ? 0.03 : 0.12), lin], [kick, g.headPitch - (fp ? 0.1 : 0.24), easeOut], [2.55, g.headPitch - 0.04], [3, g.headPitch]], c.tau));
+  set(c, 'headRoll', tr([[0, 0], [0.62, 0.05], [2.4, 0.05], [3, 0]], c.tau));
+  set(c, 'hipZ', tr([[0, 0], [0.62, 0.02], [at, 0.02, lin], [kick, -0.08, easeOut], [2.5, -0.03], [3, 0]], c.tau));
+  set(c, 'hipY', tr([[0, g.hipY], [0.62, g.hipY - 0.05], [2.6, g.hipY - 0.04], [3, g.hipY]], c.tau));
+  if (!c.f.grounded) {
+    // Fired in the air: knees up, hanging on the shot.
+    p.lFoot = v(-0.14 * b.w, 0.38 * b.s, 0.16 * b.s);
+    p.rFoot = v(0.15 * b.w, 0.5 * b.s, -0.06 * b.s);
+  } else {
+    step(c, 'rFoot', v(0, 0, -0.03), v(0.03, 0, -0.08), HEAVY);
+    set(c, 'rHeel', tr([[0, g.rHeel], [0.62, 0.2], [2.6, 0.08], [3, g.rHeel]], c.tau));
+  }
+  c.stiff = c.tau < 2 ? 24 : c.tau < 2.3 ? 60 : 18;
+}
+
+/**
+ * Optic recoil: look down at the floor with two fingers on the visor, blast
+ * it, get thrown back with the knees tucked and the arms out for balance,
+ * then land low with a hand on the floor and come back up into the guard.
+ */
+function opticRecoil(c: Ctx): void {
+  const { p, g, b, f, fp, tau } = c;
+  const air = !!c.m.air;
+  const temple = visorHand(c);
+  // 1. Aim at the floor in front.
+  const down = fp ? 0.3 : air ? 0.7 : 0.55;
+  const bend = fp ? 0.17 : 0.24;
+  set(c, 'headPitch', tr([[0, g.headPitch], [0.9, g.headPitch + down], [1.98, g.headPitch + down, lin], [2.14, g.headPitch - (fp ? 0.12 : 0.3), easeOut]], tau));
+  set(c, 'lean', tr([[0, g.lean], [0.9, bend], [1.98, bend, lin], [2.14, fp ? -0.14 : -0.42, easeOut]], tau));
+  set(c, 'hipY', tr([[0, g.hipY], [0.9, g.hipY - 0.08], [2, g.hipY - 0.08], [2.15, g.hipY + 0.02]], tau));
+  set(c, 'hipZ', tr([[0, 0], [1.98, 0.03], [2.14, -0.1, easeOut]], tau));
+  set(c, 'rElbow', tr([[0, 0], [0.8, 1], [2, 1], [2.2, 0]], tau));
+  p.rHand = path([[0, g.rHand], [0.8, temple], [2, temple, lin]], tau);
+  p.lHand = path([[0, g.lHand], [0.9, v(-0.15 * b.w, 1.22 * b.s, 0.3 * b.s)], [2, v(-0.15 * b.w, 1.22 * b.s, 0.3 * b.s), lin]], tau);
+  if (!f.grounded) {
+    p.lFoot = v(-0.14 * b.w, 0.36 * b.s, 0.14 * b.s);
+    p.rFoot = v(0.15 * b.w, 0.48 * b.s, -0.04 * b.s);
+  }
+  c.stiff = 30;
+  if (tau < 2) return;
+
+  if (!f.grounded) {
+    // 2. Thrown back: knees tucked, arms flung forward for balance, body tipped back.
+    const wob = Math.sin(c.time * 9) * 0.04;
+    p.lHand = fp ? v(-0.3 * b.w, 1.3 * b.s, 0.46 * b.s) : v(-0.38 * b.w, 1.34 * b.s, 0.4 * b.s);
+    p.rHand = fp ? v(0.3 * b.w, 1.26 * b.s, 0.44 * b.s) : v(0.38 * b.w, 1.28 * b.s, 0.36 * b.s);
+    p.lFoot = v(-0.15 * b.w, 0.46 * b.s, 0.24 * b.s);
+    p.rFoot = v(0.16 * b.w, 0.32 * b.s, 0.06 * b.s);
+    if (tau > 2.15) {
+      set(c, 'lean', fp ? -0.08 : -0.32);
+      set(c, 'headPitch', g.headPitch + (fp ? 0.03 : 0.12));
+    }
+    set(c, 'roll', wob);
+    set(c, 'lElbow', 0.6);
+    set(c, 'rElbow', 0.6);
+    c.stiff = 26;
+    return;
+  }
+  // 3. Landed: low "superhero" landing, a hand down on the floor, then back up into the guard.
+  const up = clamp((tau - 2.72) / 0.28, 0, 1);
+  const crouch = 1 - easeInOut(up);
+  const hand = fp ? v(-0.3 * b.w, 0.95 * b.s, 0.5 * b.s) : v(-0.28 * b.w, 0.62 * b.s, 0.34 * b.s);
+  p.lHand = lerpV(g.lHand, hand, crouch);
+  p.rHand = lerpV(g.rHand, fp ? v(0.24 * b.w, 1.2 * b.s, 0.34 * b.s) : v(0.26 * b.w, 1.12 * b.s, 0.1 * b.s), crouch);
+  p.lFoot = lerpV(g.lFoot, v(-0.25 * b.w, 0, 0.24 * b.s), crouch);
+  p.rFoot = lerpV(g.rFoot, v(0.22 * b.w, 0, -0.3 * b.s), crouch);
+  set(c, 'hipY', g.hipY - (fp ? 0.16 : 0.26) * crouch);
+  set(c, 'lean', g.lean + (fp ? 0.04 : 0.34) * crouch);
+  // Eyes stay on the opponent.
+  set(c, 'headPitch', g.headPitch - (fp ? 0 : 0.22) * crouch);
+  set(c, 'hipZ', -0.04 * crouch);
+  set(c, 'rHeel', 0.6 * crouch);
+  c.stiff = 30;
+}
+
 // ===========================================================================
 // Dispatch
 
@@ -707,6 +806,8 @@ const STYLES: Record<string, Style> = {
   blast,
   shoulder,
   dragon,
+  optic,
+  opticRecoil,
 };
 
 /** Style of a move: its own `anim` hint, or one derived from the limb and the strike's trajectory. */
@@ -813,7 +914,7 @@ export function strikePose(
     const own = k === limbKey;
     p.stiff[k] = own ? STIFF[phase] * (phase === 'recover' && heavy ? 0.8 : 1) : phase === 'snap' ? 60 : 30;
   }
-  p.stiff.body = phase === 'snap' ? 55 : phase === 'windup' ? 26 : phase === 'follow' ? 30 : heavy ? 14 : 18;
+  p.stiff.body = c.stiff ?? (phase === 'snap' ? 55 : phase === 'windup' ? 26 : phase === 'follow' ? 30 : heavy ? 14 : 18);
   if (limbKey && tau >= 1.2 && tau <= 2.25) p.striking.push(limbKey);
   if (limb === 'body' && tau >= 1.5 && tau <= 2.3) p.striking.push('body');
   // Impact shudder: the limb buzzes during the hit freeze.

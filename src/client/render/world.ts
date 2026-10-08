@@ -218,6 +218,8 @@ export class World {
   syncProjectiles(sim: Simulation, frac: number): void {
     const alive = new Set<number>();
     for (const p of sim.state.projectiles) {
+      // Beams have their own renderer (render/optic.ts).
+      if (sim.moveById(p.charId, p.moveId)?.vfx === 'optic') continue;
       alive.add(p.id);
       let o = this.projectiles.get(p.id);
       if (!o) {
