@@ -94,7 +94,7 @@ export class Game {
   private lastTarget = -1;
   private adv: { victim: number; kind: string; t: number; a: number; v: number } | null = null;
   private advResult: { value: number; kind: string } | null = null;
-  private kick = { pitch: 0, roll: 0, fov: 0 };
+  private kick = { pitch: 0, roll: 0, fov: 0, push: 0 };
   private demoBot: Bot | null = null;
   /** Debug/tooling hook: drives the local player with a script instead of the devices. */
   scriptedInput: ((tick: number, game: Game) => Partial<InputFrame>) | null = null;
@@ -309,6 +309,13 @@ export class Game {
   }
 
   /** Physical reaction of the victim's body (and a jolt for the attacker). */
+  /** World point -> screen pixels (null when behind the camera). */
+  private project(p: { x: number; y: number; z: number }): { x: number; y: number } | null {
+    const v = new THREE.Vector3(p.x, p.y, p.z).project(this.world.camera);
+    if (v.z > 1 || v.z < -1) return null;
+    return { x: ((v.x + 1) / 2) * window.innerWidth, y: ((1 - v.y) / 2) * window.innerHeight };
+  }
+
   private reactToHit(victimId: number, attackerId: number, dir: { x: number; y: number; z: number }, point: { y: number }, strength: number): void {
     const v = this.sim.fighter(victimId);
     const ve = this.views.get(victimId);
@@ -340,7 +347,24 @@ export class Game {
         fx.flash(at, color, heavy ? 1.6 : 0.9);
         if (heavy) fx.ring(at, color, 2.2, 0.25);
         sfx.play(heavy ? 'hitHeavy' : 'hitLight', this.nearCamera(at) * (heavy ? 1.2 : 1));
+        if (heavy || e.counter || e.hitstop >= 14) sfx.play('boom', this.nearCamera(at) * Math.min(1.4, e.force / 8 + 0.4));
         this.views.get(e.victim)?.view.hitFlash();
+        // Weight of the hit for presentation: knockback force, freeze length, counter.
+        const power = Math.min(1.6, e.force / 10 + e.hitstop / 20 + (e.counter ? 0.5 : 0));
+        const mine = e.attacker === me || e.victim === me;
+        const ally = this.sim.fighter(e.attacker)?.team === 0;
+        if (e.damage > 0) hud.damageNumber(e.point, e.damage, e.victim === me ? 'taken' : e.counter ? 'counter' : ally ? 'dealt' : 'taken');
+        if (mine && (heavy || e.counter || e.hitstop >= 14)) {
+          const sp = this.project(e.point);
+          if (sp) hud.impact(sp.x, sp.y, power, e.counter ? 'rgba(255,120,120,0.95)' : 'rgba(255,255,255,0.9)');
+          if (e.hitstop >= 16) hud.flash('rgba(255,255,255,1)', 0.1 + power * 0.06);
+        }
+        if (e.attacker === me) {
+          // The view pushes into a landed blow.
+          this.kick.push += 0.05 * power;
+          this.kick.fov -= Math.min(9, 2 + e.force * 0.5);
+          this.kick.pitch -= 0.012 * power;
+        }
         this.reactToHit(e.victim, e.attacker, e.dir, e.point, Math.min(1.6, e.force / 7 + e.damage / 90 + (e.counter ? 0.3 : 0)));
         if (e.victim === me) {
           hud.hurt(e.damage);
@@ -367,6 +391,7 @@ export class Game {
         fx.spark(at, { color: 0x66aaff, count: 12, speed: 5, size: 0.08 });
         fx.flash(at, 0x4488ff, 0.8, 0.1);
         sfx.play('block', this.nearCamera(at));
+        if (e.chip > 0 && this.sim.fighter(e.attacker)?.team === 0) hud.damageNumber(e.point, e.chip, 'chip');
         const vb = this.views.get(e.victim);
         if (vb) blockReaction(vb.mem, 0.8);
         const ab = this.views.get(e.attacker);
@@ -427,13 +452,23 @@ export class Game {
         break;
       case 'attack': {
         const f = this.sim.fighter(e.fighter);
-        if (f) sfx.play('whoosh', this.nearCamera(f.pos) * 0.8);
-        if (e.fighter === me && f) {
-          const m = this.sim.moveById(f.charId, e.move);
-          if (m) hud.strike(m.name, this.input.lastSwipe.swipe);
-        }
+        const m = f ? this.sim.moveById(f.charId, e.move) : null;
+        if (f) sfx.play(m && m.kind !== 'light' ? 'whooshHeavy' : 'whoosh', this.nearCamera(f.pos) * 0.8);
+        if (e.fighter === me && m) hud.strike(m.name, this.input.lastSwipe.swipe);
         break;
       }
+      case 'whiff': {
+        const f = this.sim.fighter(e.fighter);
+        if (f) sfx.play('miss', this.nearCamera(f.pos));
+        if (e.fighter === me) hud.strikeMiss();
+        break;
+      }
+      case 'exhausted':
+        if (e.fighter === me) {
+          hud.callout('EXHAUSTED', 'orange');
+          sfx.play('exhausted');
+        } else if (e.fighter === this.lastTarget) hud.callout('ENEMY EXHAUSTED', 'gold');
+        break;
       case 'feint':
         if (e.fighter === me) hud.callout('FEINT', 'white');
         break;
@@ -607,6 +642,7 @@ export class Game {
     const shake = this.fx.update(dt);
     this.updateCamera(me, headWorld, meJoints, shake, dt);
     this.cameraOverride?.(this.world.camera, this);
+    this.hud.updateEffects(dt, (p) => this.project(p), !!me?.exhausted);
 
     // Lock-on marker and HUD target.
     const lock = me && me.lockTarget >= 0 ? sim.fighter(me.lockTarget) : undefined;
@@ -643,6 +679,7 @@ export class Game {
     this.kick.pitch *= decay;
     this.kick.roll *= decay;
     this.kick.fov *= Math.exp(-dt * 6);
+    this.kick.push *= Math.exp(-dt * 10);
     cam.fov = 90 + this.kick.fov;
     cam.updateProjectionMatrix();
     if (!me) return;
@@ -666,7 +703,7 @@ export class Game {
     // snapping the head back, tumbling through the air...) moves the view.
     const hr = joints.headRot;
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    cam.position.copy(head).addScaledVector(fwd, -0.1);
+    cam.position.copy(head).addScaledVector(fwd, -0.1 + this.kick.push);
     cam.position.y += 0.06;
     cam.rotation.set(
       pitch + this.kick.pitch + shake.y - (hr.pitch - REST_HEAD.pitch) * 0.55,

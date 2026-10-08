@@ -93,13 +93,21 @@ export class Hud {
   private strikeTimer = 0;
   private readonly vignette: HTMLDivElement;
   private readonly flashEl: HTMLDivElement;
+  private readonly tiredEl: HTMLDivElement;
+  private readonly lines: HTMLCanvasElement;
+  private readonly numbers: HTMLDivElement;
+  private impacts: { x: number; y: number; t: number; max: number; power: number; color: string; seed: number }[] = [];
+  private floaters: { el: HTMLDivElement; t: number; world: { x: number; y: number; z: number } }[] = [];
   readonly moveList: HTMLDivElement;
   private comboTimer = 0;
 
   constructor(parent: HTMLElement) {
     this.root = el('div', 'hud', parent);
+    this.lines = el('canvas', 'impactlines', this.root);
     this.vignette = el('div', 'vignette', this.root);
+    this.tiredEl = el('div', 'tired', this.root);
     this.flashEl = el('div', 'screenflash', this.root);
+    this.numbers = el('div', 'numbers', this.root);
     this.player = new FighterPanel(this.root, 'left');
     this.target = new FighterPanel(this.root, 'right');
     el('div', 'crosshair', this.root);
@@ -118,6 +126,79 @@ export class Hud {
     c.textContent = text;
     setTimeout(() => c.remove(), 1100);
     while (this.callouts.children.length > 4) this.callouts.firstElementChild?.remove();
+  }
+
+  /**
+   * Anime-style impact lines radiating from a screen point (heavy hits,
+   * counters, finishers): the hit is "framed" for a split second.
+   */
+  impact(x: number, y: number, power: number, color = 'rgba(255,255,255,0.9)'): void {
+    const max = 0.12 + power * 0.1;
+    this.impacts.push({ x, y, t: max, max, power, color, seed: Math.random() * 1000 });
+  }
+
+  /** Floating damage number anchored to a world point (projected every frame by the game). */
+  damageNumber(world: { x: number; y: number; z: number }, amount: number, kind: 'dealt' | 'taken' | 'counter' | 'chip'): void {
+    const d = el('div', `dmg ${kind}`, this.numbers);
+    d.textContent = String(amount);
+    this.floaters.push({ el: d, t: 0, world: { ...world } });
+    if (this.floaters.length > 24) this.floaters.shift()?.el.remove();
+  }
+
+  /** The strike label turns into a "miss" marker. */
+  strikeMiss(): void {
+    this.strikeEl.classList.add('miss');
+    this.strikeTimer = 0.7;
+  }
+
+  /** Positions floating numbers and draws impact lines; `project` maps world -> screen (or null if behind). */
+  updateEffects(dt: number, project: (p: { x: number; y: number; z: number }) => { x: number; y: number } | null, exhausted: boolean): void {
+    this.tiredEl.style.opacity = exhausted ? String(0.55 + Math.sin(performance.now() / 260) * 0.15) : '0';
+    for (let i = this.floaters.length - 1; i >= 0; i--) {
+      const f = this.floaters[i];
+      f.t += dt;
+      const p = project({ x: f.world.x, y: f.world.y + f.t * 0.9, z: f.world.z });
+      if (!p || f.t > 0.9) {
+        if (f.t > 0.9) {
+          f.el.remove();
+          this.floaters.splice(i, 1);
+        } else f.el.style.opacity = '0';
+        continue;
+      }
+      f.el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%) scale(${1 + Math.max(0, 0.15 - f.t) * 4})`;
+      f.el.style.opacity = String(Math.min(1, (0.9 - f.t) * 3));
+    }
+    const c = this.lines;
+    if (c.width !== window.innerWidth || c.height !== window.innerHeight) {
+      c.width = window.innerWidth;
+      c.height = window.innerHeight;
+    }
+    const g = c.getContext('2d')!;
+    g.clearRect(0, 0, c.width, c.height);
+    for (let i = this.impacts.length - 1; i >= 0; i--) {
+      const im = this.impacts[i];
+      im.t -= dt;
+      if (im.t <= 0) {
+        this.impacts.splice(i, 1);
+        continue;
+      }
+      const k = im.t / im.max;
+      const n = 26 + Math.round(im.power * 18);
+      const inner = 40 + (1 - k) * 60;
+      const outer = Math.max(c.width, c.height) * 0.75;
+      g.strokeStyle = im.color;
+      g.globalAlpha = k * 0.85;
+      for (let j = 0; j < n; j++) {
+        const a = (j / n) * Math.PI * 2 + Math.sin(im.seed + j * 12.9898) * 0.08;
+        const r0 = inner + Math.abs(Math.sin(im.seed * 3 + j * 78.233)) * 80;
+        g.lineWidth = 1 + Math.abs(Math.sin(im.seed + j)) * 3 * im.power;
+        g.beginPath();
+        g.moveTo(im.x + Math.cos(a) * r0, im.y + Math.sin(a) * r0);
+        g.lineTo(im.x + Math.cos(a) * outer, im.y + Math.sin(a) * outer);
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+    }
   }
 
   hurt(amount: number): void {
@@ -152,6 +233,7 @@ export class Hud {
 
   /** Shows which strike came out and the flick direction that picked it (teaches the controls). */
   strike(name: string, swipe: string): void {
+    this.strikeEl.classList.remove('miss');
     const arrow: Record<string, string> = { none: '•', left: '←', right: '→', up: '↑', down: '↓' };
     this.strikeEl.innerHTML = `<span class="arrow">${arrow[swipe] ?? '•'}</span>${name}`;
     this.strikeTimer = 0.9;

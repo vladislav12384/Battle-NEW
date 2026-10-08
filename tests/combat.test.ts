@@ -99,6 +99,14 @@ describe('free-form combos', () => {
     expect(h.of('dodge').length + h.of('block').length).toBe(0);
   });
 
+  it('an uppercut pops them up long enough to follow with a roundhouse kick', () => {
+    const { a, b, h } = duel(1.2);
+    playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT, 'up'), sw(B.KICK, 'left')], { [b.id]: blocker(b.id) }, 200);
+    const end = h.of('comboEnd')[0];
+    expect(end?.hits).toBe(3);
+    expect(end?.trueCombo).toBe(true);
+  });
+
   it('punches flow into kicks: jab, left hook, roundhouse', () => {
     const { a, b, h } = duel(1.2);
     playSequence(h, a.id, [sw(B.LIGHT), sw(B.LIGHT, 'right'), sw(B.KICK, 'left')], { [b.id]: escaper(b.id) });

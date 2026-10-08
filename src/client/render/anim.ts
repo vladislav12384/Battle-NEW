@@ -348,7 +348,7 @@ export function computeTargets(
           p.rHand = v(0.22 * b.w, 1.15 * b.s, -sR * 0.35 * b.s);
           p.twist = sL * 0.25;
         }
-      } else if (f.state === 'ground') {
+      } else if (f.state === 'ground' && !f.exhausted) {
         // Fighters never stand still: bounce on the balls of the feet.
         const bounce = Math.sin(time * 6.5 + mem.seed) * 0.014 * b.s;
         const sway = Math.sin(time * 1.7 + mem.seed * 2) * 0.02;
@@ -357,6 +357,16 @@ export function computeTargets(
         p.rHand = add(p.rHand, v(0, bounce * 0.8, 0));
         p.twist += sway;
         p.roll += sway * 0.5;
+      }
+      if (f.exhausted && (f.state === 'ground' || f.state === 'block')) {
+        // Out of breath: guard sags, shoulders heave, head drops.
+        const breath = Math.sin(time * 3.2 + mem.seed);
+        p.lHand = add(p.lHand, v(0.02, -0.17 + breath * 0.025, -0.06));
+        p.rHand = add(p.rHand, v(-0.02, -0.15 + breath * 0.025, -0.04));
+        p.lean += 0.14 + breath * 0.03;
+        p.headPitch += 0.3;
+        p.hipY -= 0.05 * b.s;
+        p.stiff.body = 8;
       }
       if (f.state === 'jumpsquat' || f.state === 'land') {
         p.hipY -= 0.2 * b.s;
@@ -579,6 +589,24 @@ function attackPose(p: Pose, f: FighterState, stats: CharacterStats, b: Body, mo
     p.hipY += strikeHipY * w + coilHipY * c;
     p.headPitch = p.headPitch * (1 - w) + (isFoot ? -0.1 : 0.12) * w;
     p.stiff.body = a.phase === 'strike' ? 40 : a.phase === 'windup' ? 22 : 16;
+    if (!isFoot && limb !== 'body' && move.kind !== 'throw') {
+      // Footwork: step into the punch with the lead foot, rear heel comes up, hips sit down.
+      p.lFoot = add(p.lFoot, v(0, 0, 0.13 * w * b.s - 0.04 * c));
+      p.rFoot = add(p.rFoot, v(0, 0.05 * w, 0.05 * w));
+      p.hipY -= 0.035 * w;
+    }
+    const recoverStart = move.startup + move.active;
+    if (f.extraRecovery > 0 && frame > recoverStart) {
+      // Missed: overextended, off balance, slow to come back.
+      const k = clamp((frame - recoverStart) / (move.recovery + f.extraRecovery), 0, 1);
+      const off = 1 - easeInOut(k);
+      p.lean += 0.28 * off;
+      p.hipZ += 0.1 * off;
+      p.roll += side * 0.08 * off;
+      p.headPitch += 0.15 * off;
+      p.stiff.body = 9;
+      p.stiff[limb === 'body' || limb === 'head' ? 'body' : limb] = 11;
+    }
     if (!isFoot && move.kind !== 'throw') {
       // The off hand stays home to guard the chin.
       const off = limb === 'lHand' ? 'rHand' : 'lHand';

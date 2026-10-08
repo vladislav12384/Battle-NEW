@@ -39,7 +39,7 @@ export const STRIKER_TEMPO: TempoScale = {
 };
 
 /** Keeps an airborne victim floating during air strings. */
-const FLOAT = { fwd: 1, up: 4.6 };
+const FLOAT = { fwd: 1, up: 5.2 };
 
 const barrageHit = (hand: 'lHand' | 'rHand', group: number, f0: number) =>
   box(
@@ -161,8 +161,8 @@ const uppercut: MoveDef = {
       hitstun: 24,
       blockstun: 13,
       hitstop: 8,
-      knockback: { fwd: 1, up: 4.2 },
-      airKnockback: { fwd: 0.6, up: 6.5 },
+      knockback: { fwd: 0.8, up: 6 },
+      airKnockback: { fwd: 0.6, up: 7 },
       effect: 'launch',
     }, { limb: 'rHand' }),
   ],

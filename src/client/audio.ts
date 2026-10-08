@@ -1,6 +1,10 @@
 /** Tiny synthesized sound effects (no asset files needed for the prototype). */
 export type Sfx =
   | 'whoosh'
+  | 'whooshHeavy'
+  | 'miss'
+  | 'exhausted'
+  | 'boom'
   | 'hitLight'
   | 'hitHeavy'
   | 'block'
@@ -78,19 +82,40 @@ export class Audio {
     const k = Math.min(1.5, Math.max(0.3, intensity));
     switch (s) {
       case 'whoosh':
-        this.hiss('bandpass', 600, 1.2, 0.12 * k, 0.16, 2200);
+        this.hiss('bandpass', 700, 1.2, 0.1 * k, 0.14, 2400);
+        break;
+      case 'whooshHeavy':
+        this.hiss('bandpass', 380, 1.0, 0.16 * k, 0.32, 1600);
+        this.tone('sine', 140, 70, 0.08 * k, 0.25);
+        break;
+      case 'miss':
+        // Air cut with nothing at the end of it.
+        this.hiss('bandpass', 1600, 1.4, 0.09 * k, 0.22, 500);
+        break;
+      case 'exhausted':
+        // Heavy breath: two filtered noise puffs.
+        this.hiss('bandpass', 900, 0.7, 0.18, 0.35, 500);
+        this.hiss('bandpass', 700, 0.7, 0.14, 0.45, 400);
+        break;
+      case 'boom':
+        // Sub-bass thump under heavy impacts.
+        this.tone('sine', 65, 28, 0.9 * k, 0.45);
+        this.tone('triangle', 110, 40, 0.25 * k, 0.2);
         break;
       case 'dodge':
         this.hiss('bandpass', 1400, 0.8, 0.1, 0.18, 400);
         break;
       case 'hitLight':
-        this.tone('sine', 180, 60, 0.5 * k, 0.12);
-        this.hiss('bandpass', 1800, 0.9, 0.35 * k, 0.07);
+        // Thud + skin crack.
+        this.tone('sine', 170 + Math.random() * 30, 55, 0.6 * k, 0.14);
+        this.hiss('bandpass', 2200 + Math.random() * 600, 1.1, 0.4 * k, 0.05);
+        this.hiss('lowpass', 900, 0.6, 0.25 * k, 0.1, 200);
         break;
       case 'hitHeavy':
-        this.tone('sine', 120, 35, 0.8 * k, 0.28);
-        this.tone('square', 90, 40, 0.12 * k, 0.12);
-        this.hiss('lowpass', 2500, 0.7, 0.5 * k, 0.18, 300);
+        this.tone('sine', 110 + Math.random() * 20, 32, 0.95 * k, 0.32);
+        this.tone('square', 85, 38, 0.14 * k, 0.14);
+        this.hiss('bandpass', 1800, 0.8, 0.45 * k, 0.07);
+        this.hiss('lowpass', 2600, 0.7, 0.55 * k, 0.24, 250);
         break;
       case 'counter':
         this.tone('triangle', 900, 300, 0.25, 0.15);
