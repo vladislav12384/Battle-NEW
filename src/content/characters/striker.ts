@@ -104,7 +104,7 @@ const cross: MoveDef = {
   kind: 'light',
   stamina: 8,
   hand: 'right',
-  family: 'straight',
+  family: 'cross',
   startup: 6,
   active: 2,
   recovery: 11,
@@ -418,11 +418,12 @@ const heelAxe: MoveDef = {
   kind: 'heavy',
   stamina: 20,
   family: 'axe',
-  startup: 13,
+  // Fast enough to catch the float of the 4th punch (uppercut) before the victim can tech on landing.
+  startup: 11,
   active: 4,
-  recovery: 22,
+  recovery: 24,
   hitboxes: [
-    sweep([14, 17], [0.1, 2.15, 0.55], [0.05, 0.55, 0.8], 0.28, {
+    sweep([12, 15], [0.1, 2.15, 0.55], [0.05, 0.55, 0.8], 0.28, {
       damage: 62,
       hitstun: 34,
       blockstun: 18,

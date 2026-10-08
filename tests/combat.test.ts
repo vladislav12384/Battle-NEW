@@ -61,6 +61,17 @@ describe('strings: two buttons, the strike depends on the position in the combo'
     });
   }
 
+  it('every string from the guide is a true combo, even against a victim mashing every escape', () => {
+    for (const seq of ['LH', 'LLH', 'LLLH', 'LLLL', 'LLLLH']) {
+      const { a, b, h } = duel(1.2);
+      h.fighter(b.id).burst = 0;
+      playSequence(h, a.id, [...seq].map((c) => ({ button: c === 'L' ? L : H })), { [b.id]: escaper(b.id) }, 200);
+      const end = h.of('comboEnd')[0];
+      expect(end?.hits, seq).toBe(seq.length);
+      expect(end?.trueCombo, seq).toBe(true);
+    }
+  });
+
   it('a new string starts over: a press after the combo ended is a jab again', () => {
     const { a, h } = duel(1.2);
     h.step({ [a.id]: { buttons: L } });
