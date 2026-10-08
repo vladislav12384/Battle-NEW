@@ -422,6 +422,7 @@ export function tryGrab(sim: SimContext, a: FighterState, v: FighterState, move:
   enterState(a, 'grabbing');
   a.grabPartner = v.id;
   a.grabMove = move.id;
+  a.grabAlt = false;
   a.vel = vec3();
   enterState(v, 'grabbed');
   v.grabPartner = a.id;

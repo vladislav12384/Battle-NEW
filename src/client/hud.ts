@@ -119,6 +119,9 @@ export class Hud {
   private readonly tiredEl: HTMLDivElement;
   private readonly witchEl: HTMLDivElement;
   private readonly visorEl: HTMLDivElement;
+  private readonly cinemaEl: HTMLDivElement;
+  private readonly cinemaTitle: HTMLDivElement;
+  private cinemaKey = '';
   private readonly burnEl: HTMLDivElement;
   private readonly ricoEl: HTMLDivElement;
   private readonly ricoMark: HTMLDivElement;
@@ -171,6 +174,23 @@ export class Hud {
     this.badgeEl = el('div', 'cardbadge', this.root);
     this.revealEl = el('div', 'cardreveal', this.root);
     this.moveList = el('div', 'movelist hidden', this.root);
+    this.cinemaEl = el('div', 'cinema', this.root);
+    el('div', 'bar top', this.cinemaEl);
+    const bottom = el('div', 'bar bottom', this.cinemaEl);
+    this.cinemaTitle = el('div', 'cinetitle', bottom);
+  }
+
+  /**
+   * Cinematic throw on screen: letterbox bars slide in, the fight HUD steps
+   * aside and the name of the throw is set in the lower bar.
+   */
+  cinema(title: string | null, on: boolean): void {
+    this.root.classList.toggle('incinema', on);
+    const key = on && title ? title : '';
+    if (key === this.cinemaKey) return;
+    this.cinemaKey = key;
+    this.cinemaTitle.textContent = key;
+    this.cinemaTitle.classList.toggle('on', !!key);
   }
 
   /** Red glow of Cyclops' visor at the edges of the view (0 = off). */

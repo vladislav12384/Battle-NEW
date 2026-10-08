@@ -1721,3 +1721,51 @@ kbd {
 #cardslot .tcard {
   zoom: 0.78;
 }
+
+/* ---------------------------------------------------------------- Cinematic throw */
+.cinema {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cinema .bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 11vh;
+  background: #000;
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cinema .bar.top {
+  top: 0;
+  transform: translateY(-101%);
+}
+.cinema .bar.bottom {
+  bottom: 0;
+  transform: translateY(101%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hud.incinema .cinema .bar {
+  transform: none;
+}
+.cinetitle {
+  color: #ffe1dc;
+  font-size: clamp(14px, 2.2vh, 22px);
+  font-weight: 800;
+  letter-spacing: 0.9em;
+  text-indent: 0.9em;
+  text-shadow: 0 0 14px rgba(255, 50, 30, 0.85);
+  opacity: 0;
+  transition: opacity 0.5s, letter-spacing 1.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cinetitle.on {
+  opacity: 1;
+  letter-spacing: 0.45em;
+  text-indent: 0.45em;
+}
+/* The fight HUD steps aside while the film plays. */
+.hud.incinema > :not(.cinema):not(.visor):not(.screenflash):not(.impactlines):not(.numbers):not(.vignette) {
+  opacity: 0 !important;
+}

@@ -1222,6 +1222,11 @@ function stateGrabbing(sim: FighterHost, f: FighterState, input: InputFrame): vo
   const m = f.grabMove ? sim.moveById(f.charId, f.grabMove) : null;
   const holding = v && v.state === 'grabbed' && v.grabPartner === f.id;
   const execFrame = RULES.throwTechWindow + 1;
+  const cine = m?.throw?.cinematic;
+  if (cine && m) {
+    cinematicThrow(sim, f, holding ? v : undefined, m, cine, input);
+    return;
+  }
   if (!m?.throw || (!holding && f.stateFrame <= execFrame)) {
     f.grabPartner = -1;
     toNeutral(sim, f, input);
@@ -1229,7 +1234,27 @@ function stateGrabbing(sim: FighterHost, f: FighterState, input: InputFrame): vo
   }
   if (holding && v) {
     pinVictim(sim, f, v);
+    // During the hold LMB picks the alternative (showcase) throw, RMB the usual one.
+    if (m.throw.alt && f.stateFrame < execFrame) {
+      if (buffered(f.input, Button.LIGHT)) {
+        consume(f.input, Button.LIGHT);
+        f.grabAlt = true;
+      } else if (buffered(f.input, Button.HEAVY)) {
+        consume(f.input, Button.HEAVY);
+        f.grabAlt = false;
+      }
+    }
     if (f.stateFrame === execFrame) {
+      const alt = f.grabAlt && m.throw.alt ? sim.moveById(f.charId, m.throw.alt) : null;
+      if (alt?.throw?.cinematic) {
+        // The tech window is over: the scene starts.
+        enterState(f, 'grabbing');
+        f.grabMove = alt.id;
+        f.cine = true;
+        v.cine = true;
+        sim.emit({ type: 'cinematic', attacker: f.id, victim: v.id, move: alt.id });
+        return;
+      }
       // The tech window is over: throw.
       v.grabPartner = -1;
       f.grabPartner = -1;
@@ -1251,6 +1276,61 @@ function stateGrabbing(sim: FighterHost, f: FighterState, input: InputFrame): vo
   if (f.stateFrame >= execFrame + m.throw.recovery) toNeutral(sim, f, input);
 }
 
+/**
+ * A cinematic throw plays out: the victim stays pinned (the client moves the
+ * bodies through the scene), takes the beats' damage (never lethal) and at
+ * the last frame the throw's hit lands; then the thrower recovers.
+ */
+function cinematicThrow(
+  sim: FighterHost,
+  f: FighterState,
+  v: FighterState | undefined,
+  m: MoveDef,
+  c: NonNullable<NonNullable<MoveDef['throw']>['cinematic']>,
+  input: InputFrame,
+): void {
+  const fr = f.stateFrame;
+  if (v && fr <= c.frames) {
+    pinVictim(sim, f, v);
+    const stats = sim.statsOf(v);
+    c.beats.forEach((b, i) => {
+      if (b.frame !== fr) return;
+      const dmg = Math.max(0, Math.min(b.damage, v.health - 1));
+      v.health -= dmg;
+      v.shake = 6;
+      sim.emit({ type: 'cineBeat', attacker: f.id, victim: v.id, index: i, damage: dmg, point: vec3(v.pos.x, v.pos.y + stats.height * 0.6, v.pos.z) });
+    });
+    if (fr === c.frames) {
+      // The scene's last blow: the throw lands for real.
+      v.grabPartner = -1;
+      f.grabPartner = -1;
+      v.cine = false;
+      enterState(v, 'hitstun');
+      resolveHit(sim, {
+        attacker: f,
+        victim: v,
+        hit: m.throw!.hit,
+        move: m,
+        point: vec3(v.pos.x, v.pos.y + stats.height * 0.3, v.pos.z),
+        kbYaw: f.yaw,
+        from: f.pos,
+        source: 'throw',
+      });
+      sim.emit({ type: 'throw', attacker: f.id, victim: v.id });
+    }
+  } else if (fr <= c.frames) {
+    // The victim is gone (it can't happen in a fair fight, but never get stuck).
+    f.grabPartner = -1;
+    f.cine = false;
+    toNeutral(sim, f, input);
+    return;
+  }
+  if (fr >= c.frames + m.throw!.recovery) {
+    f.cine = false;
+    toNeutral(sim, f, input);
+  }
+}
+
 function stateGrabbed(sim: FighterHost, f: FighterState, input: InputFrame): void {
   const a = sim.fighter(f.grabPartner);
   if (!a || a.state !== 'grabbing' || a.grabPartner !== f.id) {
@@ -1258,8 +1338,8 @@ function stateGrabbed(sim: FighterHost, f: FighterState, input: InputFrame): voi
     toNeutral(sim, f, input);
     return;
   }
-  // Throw tech: any attack button (or both) in time breaks free.
-  if (f.stateFrame <= RULES.throwTechWindow) {
+  // Throw tech: any attack button (or both) in time breaks free. Not once the scene of a cinematic throw runs.
+  if (f.stateFrame <= RULES.throwTechWindow && !f.cine) {
     for (const b of [Button.GRAB, Button.LIGHT, Button.HEAVY]) {
       if (!buffered(f.input, b)) continue;
       consume(f.input, b);

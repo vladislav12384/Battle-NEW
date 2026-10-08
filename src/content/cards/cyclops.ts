@@ -29,11 +29,15 @@
  *                   someone and you rise: controlled flight, the stick steers).
  *   New animations  air spin kick (aerial tornado), air hammer (front-flip
  *                   smash), dive kick (meteor): same moves, new choreography.
+ *   Grab, then LMB  the showcase throw: a cinematic scene (same film for both,
+ *                   the camera directs itself): knee, toss, beam up through
+ *                   the opponent, a rocket jump on the recoil, a flip smash
+ *                   into the floor. RMB (or nothing): the usual quick throw.
  */
 import { Button } from '../../core/input';
 import { DEG } from '../../core/math/vec3';
 import type { HitDef, MoveDef } from '../../core/types';
-import { STRIKER_TEMPO } from '../characters/striker';
+import { striker, STRIKER_TEMPO } from '../characters/striker';
 import { sweep, tempo } from '../dsl';
 import type { CardDef } from '.';
 
@@ -383,6 +387,57 @@ const megaBeamMove: MoveDef = {
   },
 };
 
+/** Cyclops' showcase throw: knee, toss, beam, rocket jump, flip smash. Timings shared with the client's scene. */
+export const SHOWCASE = {
+  knee: 14,
+  toss: 22,
+  beam: [52, 62, 72],
+  rocket: 82,
+  smash: 104,
+  end: 124,
+} as const;
+
+const showcaseFinal: HitDef = {
+  damage: 70,
+  hitstun: 40,
+  blockstun: 0,
+  hitstop: 14,
+  knockback: { fwd: 2.2, up: 1.4 },
+  launch: true,
+  knockdown: true,
+  hardKnockdown: true,
+  effect: 'throw',
+};
+
+const showcaseThrow: MoveDef = {
+  id: 'cyclops_showcase',
+  name: 'Optic Showcase (throw)',
+  kind: 'throw',
+  vfx: 'showcase',
+  startup: 1,
+  active: 1,
+  recovery: 1,
+  hitboxes: [],
+  throw: {
+    hit: showcaseFinal,
+    recovery: 36,
+    cinematic: {
+      frames: SHOWCASE.end,
+      beats: [
+        { frame: SHOWCASE.knee, damage: 16 },
+        ...SHOWCASE.beam.map((frame) => ({ frame, damage: 12 })),
+      ],
+    },
+  },
+};
+
+/** The grab, with LMB during the hold leading to the showcase throw. */
+const cyclopsGrab: MoveDef = {
+  ...striker.moves.grab,
+  id: 'grab_cyclops',
+  throw: { ...striker.moves.grab.throw!, alt: 'cyclops_showcase' },
+};
+
 export const megaBeam: CardDef = {
   id: 'mega_beam',
   name: 'Мега-луч',
@@ -393,11 +448,12 @@ export const megaBeam: CardDef = {
     'Очко супера — держи <kbd>E</kbd>: вместо «Ста кулаков» сплошной луч до 2.5 с, ведёшь его взглядом, бьёт всех на линии',
     'Луч толкает назад. В прыжке стреляй вниз по врагу — и лети: управляемый полёт, <kbd>WASD</kbd> рулит',
     'Новые анимации в воздухе: вертушка, молот вниз, удар в пике',
+    'Захват, затем <kbd>ЛКМ</kbd> — показательный бросок с кинокамерой; <kbd>ПКМ</kbd> — быстрый',
   ],
   hint: 'держи <kbd>E</kbd> с очком супера — луч и полёт',
   flavor: 'Отдача — тоже оружие.',
-  moves: [megaBeamMove],
-  swap: { barrage: 'mega_beam' },
+  moves: [megaBeamMove, cyclopsGrab, showcaseThrow],
+  swap: { barrage: 'mega_beam', grab: 'grab_cyclops' },
   commands: [{ move: 'mega_beam', button: E, air: true }],
   restyle: {
     air_spin: { anim: 'airTornado', vfx: 'airTornado' },

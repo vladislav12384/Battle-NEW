@@ -63,6 +63,7 @@ export class FighterView {
   private readonly mats: THREE.MeshStandardMaterial[] = [];
   private readonly skin: THREE.MeshStandardMaterial;
   private readonly aura: THREE.Mesh;
+  private auraLevel = 1;
   private readonly b: ReturnType<typeof bodyOf>;
   private flashT = 0;
   private flashK = 1;
@@ -197,8 +198,9 @@ export class FighterView {
   }
 
   /** Color of the energy aura (strikes wrapped in a hero's energy glow in its color). */
-  setAura(color: number): void {
+  setAura(color: number, level = 1): void {
     (this.aura.material as THREE.MeshBasicMaterial).color.set(color);
+    this.auraLevel = level;
   }
 
   /** Burning: an orange smoulder over the whole body (0 = none). */
@@ -311,7 +313,7 @@ export class FighterView {
     for (const m of this.mats) m.emissive.setRGB(fl * fc.r + bg * 0.55, fl * fc.g + bg * 0.16, fl * fc.b);
     this.skin.emissive.setRGB(g * 0.6 + fl * fc.r + bg * 0.6, g * 0.45 + fl * fc.g + bg * 0.2, g * 0.15 + fl * fc.b);
     const aMat = this.aura.material as THREE.MeshBasicMaterial;
-    aMat.opacity = firstPerson ? 0 : g * 0.18;
+    aMat.opacity = firstPerson ? 0 : g * 0.18 * this.auraLevel;
     toThree(j.chest, this.aura.position).add(toThree(j.hip, this.tmpA)).multiplyScalar(0.5);
     this.aura.visible = aMat.opacity > 0.01;
   }

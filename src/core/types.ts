@@ -218,6 +218,24 @@ export interface ThrowDef {
   hit: HitDef;
   /** Frames the thrower stays busy after the throw lands. */
   recovery: number;
+  /**
+   * The throw done instead when LMB is pressed during the hold (RMB, or no
+   * press, gives this one). Usually a cinematic showcase throw.
+   */
+  alt?: string;
+  /** A cinematic throw: a scripted scene of `frames`, damage beats on the way, then `hit` lands. */
+  cinematic?: CinematicDef;
+}
+
+/**
+ * A cinematic throw: once it starts, both fighters play a scripted scene
+ * (the client choreographs bodies and camera from the frame count). They are
+ * untouchable and can't break out; the victim takes the beats' damage (never
+ * lethal) and, at the end, the throw's hit.
+ */
+export interface CinematicDef {
+  frames: number;
+  beats: { frame: number; damage: number }[];
 }
 
 export interface InvulnDef {

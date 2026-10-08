@@ -25,11 +25,14 @@ import { InputDevice } from './input';
 import { FighterView, toThree } from './render/fighterView';
 import { Fx } from './render/fx';
 import { type BeamStyle, OpticFx } from './render/optic';
+import { type SceneActor, type SceneFrame, sceneBlend, showcaseScene } from './render/cinematic';
+import { SHOWCASE } from '../content/cards/cyclops';
 import {
   advanceWalk,
   animate,
   type AnimMemory,
   blockReaction,
+  bodyOf,
   computeTargets,
   hitReaction,
   impactRecoil,
@@ -188,6 +191,21 @@ export class Game {
   onLevelChange: ((level: BotLevel) => void) | null = null;
   /** Called when cards are equipped or taken off in game. */
   onCardChange: ((cards: string[]) => void) | null = null;
+  /**
+   * A cinematic throw playing (Cyclops' showcase): who, where the thrower
+   * stood and faced, the victim's distance, the scene frame and the film.
+   */
+  private scene: {
+    attacker: number;
+    victim: number;
+    move: string;
+    A: THREE.Vector3;
+    yaw: number;
+    d: number;
+    t: number;
+    film: SceneFrame | null;
+    handed: boolean;
+  } | null = null;
   /** Ricochet super: who the visor would hit right now (null = no point / no card), refreshed a few times a second. */
   private rico: { target: number; ok: boolean } | null = null;
   /** Visor charge of the local player's eyes (0..1) and the flash of a shot, for the HUD. */
@@ -535,6 +553,7 @@ export class Game {
     this.opticTick();
     this.cardTick();
     this.ricoTick();
+    this.sceneTick();
     this.tutorialTick(events);
     const tip = this.settings.hints && !this.tutorial ? this.coach.update(sim, this.player, events, this.threatHeavy) : null;
     this.tipText = tip?.text ?? null;
@@ -919,6 +938,147 @@ export class Game {
     if (this.sim.state.frame % 8 !== 0 && this.rico) return;
     const plan = autoAimPlan(this.sim, me, m);
     this.rico = { target: plan?.target.id ?? -1, ok: !!plan };
+  }
+
+  // ------------------------------------------------------------------ cinematic throws
+
+  /** The film of the cinematic throw playing now (null when none: the scene ends with the thrower's move). */
+  private sceneNow(frac: number): SceneFrame | null {
+    const sc = this.scene;
+    if (!sc) return null;
+    const a = this.sim.fighter(sc.attacker);
+    if (!a || a.state !== 'grabbing' || a.grabMove !== sc.move) {
+      this.scene = null;
+      return null;
+    }
+    sc.t = a.stateFrame + (a.hitstop > 0 || this.paused ? 0 : frac);
+    sc.film = showcaseScene(sc.t, sc.d);
+    return sc.film;
+  }
+
+  /** Scene space (x right, y up, z forward of the thrower at the start) -> world. */
+  private sceneWorld(p: { x: number; y: number; z: number }): THREE.Vector3 {
+    const sc = this.scene!;
+    const s = Math.sin(sc.yaw);
+    const c = Math.cos(sc.yaw);
+    return new THREE.Vector3(sc.A.x + c * p.x - s * p.z, sc.A.y + p.y, sc.A.z - s * p.x - c * p.z);
+  }
+
+  /** The participants watch the film: the directed shot, blended in and out of the game camera. */
+  private filmCamera(film: SceneFrame, shake: { x: number; y: number; roll: number }): void {
+    const sc = this.scene!;
+    const cam = this.world.camera;
+    let pos = this.sceneWorld(film.shot.pos);
+    let look = this.sceneWorld(film.shot.look);
+    // Directed shots stay inside the walls.
+    const ar = this.sim.arena;
+    pos.x = Math.max(-ar.halfX + 0.4, Math.min(ar.halfX - 0.4, pos.x));
+    pos.z = Math.max(-ar.halfZ + 0.4, Math.min(ar.halfZ - 0.4, pos.z));
+    if (film.shot.pov) {
+      const self = this.views.get(film.shot.pov === 'attacker' ? sc.attacker : sc.victim);
+      const other = this.views.get(film.shot.pov === 'attacker' ? sc.victim : sc.attacker);
+      if (self?.joints) pos = self.view.root.localToWorld(toThree(self.joints.head));
+      if (other?.joints) look = other.view.root.localToWorld(toThree(film.shot.pov === 'attacker' ? other.joints.chest : other.joints.head));
+      else look = pos.clone().add(new THREE.Vector3(0, 1, 0));
+    }
+    const k = sceneBlend(sc.t);
+    const m = new THREE.Matrix4().lookAt(pos, look, new THREE.Vector3(0, 1, 0));
+    const q = new THREE.Quaternion().setFromRotationMatrix(m);
+    q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(shake.y, shake.x, shake.roll)));
+    cam.position.lerp(pos, k);
+    cam.quaternion.slerp(q, k);
+    cam.fov = cam.fov + (film.shot.fov - cam.fov) * k;
+    cam.updateProjectionMatrix();
+  }
+
+  /** One-shot moments of the film (sound, light, dust), on the frames they happen. */
+  private sceneTick(): void {
+    const sc = this.scene;
+    if (!sc) return;
+    const a = this.sim.fighter(sc.attacker);
+    if (!a || a.state !== 'grabbing' || a.grabMove !== sc.move) return;
+    const k = a.stateFrame;
+    const fx = this.fx;
+    const sfx = this.audio;
+    const film = showcaseScene(k, sc.d);
+    const ea = this.views.get(sc.attacker);
+    const head = ea?.joints ? ea.view.root.localToWorld(toThree(ea.joints.head)) : this.sceneWorld({ x: 0, y: 1.6, z: 0 });
+    const victimAt = film.victim ? this.sceneWorld({ x: film.victim.off.x, y: film.victim.off.y + 0.9, z: film.victim.off.z }) : this.sceneWorld({ x: 0, y: 0.3, z: sc.d });
+    const near = this.nearCamera(a.pos);
+    const S = SHOWCASE;
+    const watch = sc.attacker === this.playerId || sc.victim === this.playerId;
+    if (k === S.toss + 8) sfx.play('whooshHeavy', near * 1.3);
+    if (k === S.toss + 26) {
+      sfx.play('megaStart', near * 1.2);
+      fx.flash(head, 0xff4a2a, 2.2, 0.16);
+      fx.ring(head, 0xffb0a0, 1.8, 0.24);
+    }
+    if (film.beam) {
+      if (k % 6 === 0) sfx.play('beamHum', near);
+      fx.spark(victimAt, { color: k % 2 ? 0xff7a48 : 0xffd0b0, count: 4, speed: 6, size: 0.08, gravity: 6, life: 0.4 });
+    }
+    if (k === S.rocket - 2) sfx.play('megaEnd', near);
+    if (k === S.rocket + 2) {
+      // The blast into the floor that throws Cyclops into the air.
+      const floor = this.sceneWorld({ x: 0, y: 0.05, z: 0.1 });
+      const up = new THREE.Vector3(0, 1, 0);
+      this.optic.flashBeam(head, floor, 1.4, 0.14);
+      fx.flash(floor.clone().setY(0.3), 0xff5a3a, 2.6, 0.2);
+      fx.shock(floor, up, 0xff6a3a, 3.6, 0.42, 0.9);
+      fx.shock(floor.clone().setY(0.08), up, 0xffffff, 2.2, 0.26, 0.7);
+      fx.spark(floor, { color: 0x9a8f86, count: 34, speed: 4, size: 0.26, gravity: 1.2, life: 1, dir: new THREE.Vector3(0, 0.45, 0), spread: 1.2 });
+      fx.spark(floor, { color: 0xff7040, count: 30, speed: 9, size: 0.09, gravity: 9, life: 0.6, dir: up, spread: 0.7 });
+      this.optic.scorch(floor.clone().setY(0.012), up, 1.6);
+      sfx.play('opticFloor', near * 1.3);
+      fx.shake(watch ? 0.4 : 0.2);
+    }
+    // Afterimages on the way up and on the way down.
+    const streak = (k > S.rocket + 2 && k < S.rocket + 10) || (k > S.smash - 4 && k < S.smash + 10);
+    if (ea && streak && k % 3 === 0) this.spawnGhost(ea, RUBY, 0.14, 0.2);
+    if (k === S.smash) {
+      // Both fists come down on it.
+      fx.star(victimAt, 0xffe0a0, 2.6, 0.22);
+      fx.flash(victimAt, 0xffc04d, 2.4, 0.16);
+      fx.shock(victimAt, new THREE.Vector3(0, -1, 0), 0xffffff, 3, 0.32);
+      fx.spark(victimAt, { color: 0xffc04d, count: 44, speed: 10, size: 0.12, spread: 0.9 });
+      sfx.play('hitHeavy', 1.4);
+      sfx.play('boom', 1.3);
+      if (watch) {
+        this.impactFrame = 0.06;
+        sfx.play('impact', 1.3);
+        this.hud.impact(window.innerWidth / 2, window.innerHeight / 2, 1.4, 'rgba(255,255,255,0.9)');
+      }
+      fx.shake(watch ? 0.5 : 0.25);
+    }
+    if (k === S.smash + 12) this.craterAt(this.sceneWorld({ x: 0, y: 0.05, z: sc.d }), watch ? 0.6 : 0.3);
+    if (k === S.end - 2) {
+      const feet = this.sceneWorld({ x: 0, y: 0.06, z: 0 });
+      fx.shock(feet, new THREE.Vector3(0, 1, 0), 0xc8beb0, 2.4, 0.35, 0.6);
+      fx.spark(feet, { color: 0xa09484, count: 26, speed: 3.5, size: 0.2, gravity: 3, life: 0.7, dir: new THREE.Vector3(0, 0.5, 0), spread: 1.1 });
+      sfx.play('land', near * 1.4);
+      fx.shake(watch ? 0.3 : 0.1);
+    }
+    if (k === S.end + 6) {
+      // The hero shot: the visor flares.
+      fx.flash(head, 0xff3a24, 1.6, 0.25);
+      fx.ring(head, 0xff6a50, 1.4, 0.3);
+      sfx.play('opticCharge', near * 1.2);
+    }
+  }
+
+  /** A body driven into the floor: rings, rubble, a scorched blot. */
+  private craterAt(at: THREE.Vector3, shake: number): void {
+    const fx = this.fx;
+    const up = new THREE.Vector3(0, 1, 0);
+    fx.shock(at, up, 0xffffff, 3.6, 0.4, 0.85);
+    fx.shock(at.clone().setY(0.08), up, RUBY, 2.6, 0.32, 0.9);
+    fx.flash(at.clone().setY(0.3), 0xff5a30, 2.6, 0.18);
+    fx.spark(at, { color: 0xa09484, count: 46, speed: 6.5, size: 0.24, gravity: 9, life: 0.9, dir: up, spread: 1.1 });
+    fx.spark(at, { color: 0xff7a48, count: 24, speed: 8, size: 0.08, gravity: 9, life: 0.5, dir: up, spread: 0.9 });
+    this.optic.scorch(at.clone().setY(0.012), up, 2.1);
+    this.audio.play('meteor', 1.3);
+    this.audio.play('boom', 1.2);
+    fx.shake(shake);
   }
 
   private reactToHit(victimId: number, attackerId: number, dir: { x: number; y: number; z: number }, point: { y: number }, strength: number): void {
@@ -1354,9 +1514,58 @@ export class Game {
         if (p && this.optic.has(e.id)) this.optic.fire(p.id, e.fighter, this.worldPoint(p.pos), this.worldPoint(p.pos));
         break;
       }
+      case 'grab': {
+        const a = this.sim.fighter(e.attacker);
+        const m = a?.grabMove ? this.sim.moveById(a.charId, a.grabMove) : null;
+        if (e.attacker === me && m?.throw?.alt) hud.note('<kbd>ЛКМ</kbd> — показательный бросок · <kbd>ПКМ</kbd> — быстрый', 'perfect');
+        break;
+      }
+      case 'cinematic': {
+        const a = this.sim.fighter(e.attacker);
+        const v = this.sim.fighter(e.victim);
+        if (!a || !v) break;
+        this.scene = {
+          attacker: a.id,
+          victim: v.id,
+          move: e.move,
+          A: new THREE.Vector3(a.pos.x, a.pos.y, a.pos.z),
+          yaw: a.yaw,
+          d: Math.hypot(v.pos.x - a.pos.x, v.pos.z - a.pos.z),
+          t: 0,
+          film: null,
+          handed: false,
+        };
+        sfx.play('impact', 1.1);
+        sfx.play('whooshHeavy', 1.2);
+        break;
+      }
+      case 'cineBeat': {
+        const at = this.worldPoint(e.point);
+        const v = this.sim.fighter(e.victim);
+        // The body is wherever the film has put it, not at its pinned spot.
+        const ev = this.views.get(e.victim);
+        const chest = ev?.joints ? ev.view.root.localToWorld(toThree(ev.joints.chest)) : at;
+        if (e.index === 0) {
+          // The knee to the gut.
+          fx.spark(chest, { color: 0xffc04d, count: 40, speed: 9, size: 0.12, spread: 0.9 });
+          fx.star(chest, 0xffe0a0, 1.6, 0.18);
+          // A ring of the blow, facing whoever watches.
+          fx.shock(chest, this.world.camera.position.clone().sub(chest).normalize(), 0xffffff, 0.9, 0.2);
+          sfx.play('hitHeavy', 1.3);
+          sfx.play('thump', 1.3);
+          this.fx.shake(0.35);
+        } else {
+          // The beam burns through.
+          fx.spark(chest, { color: 0xff7a48, count: 22, speed: 7, size: 0.09, gravity: 5, life: 0.45 });
+          fx.flash(chest, 0xff4a2a, 1.8, 0.12);
+          sfx.play('sizzle', 1);
+        }
+        this.views.get(e.victim)?.view.hitFlash(1.5, e.index === 0 ? 0xffd9b3 : 0xff6040);
+        if (e.damage > 0) hud.damageNumber({ x: chest.x, y: chest.y, z: chest.z }, e.damage, v?.team === 0 ? 'taken' : 'dealt');
+        break;
+      }
       case 'respawn':
       case 'jump':
-      case 'grab':
         break;
     }
   }
@@ -1380,18 +1589,38 @@ export class Game {
     let headWorld: THREE.Vector3 | null = null;
     let meJoints: Joints | null = null;
 
+    // A cinematic throw: its two actors are placed and posed by the film.
+    const film = this.sceneNow(frac);
+    const sc = this.scene;
+    const inFilm = !!film && !!sc && (sc.attacker === this.playerId || sc.victim === this.playerId);
     for (const f of sim.state.fighters) {
       const e = this.views.get(f.id);
       if (!e) continue;
       const stats = sim.statsOf(f);
+      const actor: SceneActor | null = film && sc ? (f.id === sc.attacker ? film.attacker : f.id === sc.victim ? film.victim : null) : null;
+      if (sc && film && f.id === sc.victim && !film.victim && !sc.handed) {
+        // Handed back to the simulation lying flat: the tumble picks up from there.
+        sc.handed = true;
+        e.mem.body.tiltPitch.x = -Math.PI / 2;
+        e.mem.body.tiltPitch.v = 0;
+      }
       const teleported = Math.hypot(f.pos.x - e.prev.x, f.pos.z - e.prev.z) > 3;
       const k = teleported ? 1 : frac;
-      const x = e.prev.x + (f.pos.x - e.prev.x) * k;
-      const y = e.prev.y + (f.pos.y - e.prev.y) * k;
-      const z = e.prev.z + (f.pos.z - e.prev.z) * k;
+      let x = e.prev.x + (f.pos.x - e.prev.x) * k;
+      let y = e.prev.y + (f.pos.y - e.prev.y) * k;
+      let z = e.prev.z + (f.pos.z - e.prev.z) * k;
       const isMe = f.id === this.playerId;
-      const fp = isMe && firstPerson;
+      const fp = isMe && firstPerson && !inFilm;
+      // Seen through this actor's eyes in the film: no head or torso in the way.
+      const pov = !!actor && inFilm && !!film && !!sc && film.shot.pov === (f.id === sc.attacker ? 'attacker' : 'victim');
       let yaw = e.prev.yaw + wrapAngle(f.yaw - e.prev.yaw) * k;
+      if (actor && sc) {
+        const w = this.sceneWorld(actor.off);
+        x = w.x;
+        y = w.y;
+        z = w.z;
+        yaw = sc.yaw + actor.yaw;
+      }
       if (fp) {
         // Arms trail a fast flick a little and catch up: weight, not a rigid gun model.
         yaw = e.yaw.step(e.yaw.x + wrapAngle(yaw - e.yaw.x), dt, 38, 0.8);
@@ -1407,6 +1636,10 @@ export class Game {
       e.view.root.rotation.y = yaw;
       advanceWalk(e.mem, x, z, stats, f.running);
       const target = computeTargets(f, stats, sim.moveOf(f), e.mem, this.time, frac, fp);
+      if (actor) {
+        actor.pose(target, bodyOf(stats), this.time);
+        target.striking = actor.striking;
+      }
       const pose = animate(e.mem, target, dt);
       if (fp) {
         // First-person viewmodel space: our own fists never fill the screen. A hand
@@ -1430,7 +1663,7 @@ export class Game {
       e.pose = pose;
       // Cyclops' ruby visor burns brighter as the eyes charge, flares on the shot.
       const cm = f.state === 'attack' ? sim.moveOf(f) : null;
-      let charge = 0;
+      let charge = film && sc && f.id === sc.attacker ? film.eyes : 0;
       if (cm && isOptic(cm)) {
         const fire = opticFireFrame(cm);
         const fr = f.moveFrame + (f.hitstop > 0 ? 0 : frac);
@@ -1438,12 +1671,15 @@ export class Game {
       }
       if (this.hasVisor(f.charId)) e.view.setVisor(cm?.vfx === 'ricochetSuper' ? 0xff6a14 : 0xff2814, 1.6 + charge * 9, charge);
       else e.view.setVisor(e.color, 0.7);
-      e.view.setAura(cm?.vfx && RUBY_VFX.has(cm.vfx) ? RUBY : e.color);
+      // In the film the bodies act on their own: no energy aura around them.
+      e.view.setAura(cm?.vfx && RUBY_VFX.has(cm.vfx) ? RUBY : e.color, actor ? 0 : 1);
       e.view.setBurn(f.burn > 0 && f.state !== 'ko' ? 0.55 + 0.35 * Math.sin(this.time * 23 + f.id) + 0.1 * Math.sin(this.time * 61) : 0);
       if (isMe) this.visorCharge = charge;
       const joints = solveSkeleton(stats, pose);
       e.joints = joints;
-      e.view.update(joints, pose, fp, dt);
+      e.view.update(joints, pose, fp || pov, dt);
+      // Seen through these eyes in the film: the body stays out of the shot.
+      e.view.root.visible = !pov;
       e.view.root.updateMatrixWorld();
 
       if (pose.striking.length) {
@@ -1501,6 +1737,8 @@ export class Game {
     this.world.drawDebug(sim, this.settings.hitboxes, firstPerson ? this.playerId : -1);
     const shake = this.fx.update(dt);
     this.updateCamera(me, headWorld, meJoints, shake, dt);
+    if (film && inFilm) this.filmCamera(film, shake);
+    this.hud.cinema(film && inFilm ? film.title : null, !!film && inFilm);
     this.cameraOverride?.(this.world.camera, this);
     this.trackBeams(frac);
     this.optic.aimPreview(me ? this.bankPreview(me) : null);
@@ -1518,6 +1756,18 @@ export class Game {
       streams.add(`m${f.id}`);
       this.optic.stream(`m${f.id}`, f.id, origin, tip, fpMe ? 0.8 : 1.6);
     }
+    // The film's beam: from the thrower's eyes up through the victim.
+    if (film?.beam && sc) {
+      const ea = this.views.get(sc.attacker);
+      const ev = this.views.get(sc.victim);
+      if (ea?.joints && ev?.joints) {
+        const eyes = ea.view.root.localToWorld(toThree(ea.joints.head));
+        const chest = ev.view.root.localToWorld(toThree(ev.joints.chest));
+        const tip = chest.clone().addScaledVector(chest.clone().sub(eyes).normalize(), 0.5);
+        streams.add('cine');
+        this.optic.stream('cine', sc.attacker, eyes, tip, film.shot.beamWidth);
+      }
+    }
     this.optic.pruneStreams(streams);
     this.optic.update(dt, this.world.camera.position);
     this.hud.burning(me && me.burn > 0 && me.state !== 'ko' ? 0.5 + 0.25 * Math.sin(this.time * 17) : 0);
@@ -1527,7 +1777,7 @@ export class Game {
     this.hud.ricochet(this.rico ? { ok: this.rico.ok, x: rp?.x ?? null, y: rp?.y ?? null } : null);
     // Seen from inside the visor: a red glow at the edges while the eyes charge and fire.
     this.visorFlash = Math.max(0, this.visorFlash - dt * 4);
-    this.hud.visor(firstPerson && me ? Math.max(this.visorCharge * 0.6, this.visorFlash) : 0);
+    this.hud.visor(film && inFilm ? (film.shot.visor ? 0.45 + 0.5 * film.eyes : 0) : firstPerson && me ? Math.max(this.visorCharge * 0.6, this.visorFlash) : 0);
     const threats = me && me.state !== 'ko' ? this.computeThreats(me) : [];
     this.threatHeavy = threats.some((t) => t.kind !== 'light');
     this.hud.threats(threats);

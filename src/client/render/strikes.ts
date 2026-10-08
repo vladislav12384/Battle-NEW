@@ -24,11 +24,11 @@ import { add, type Body, easeIn, easeInOut, easeOut, lerpV, mul, norm, type Pose
 type Ease = (t: number) => number;
 const lin: Ease = (t) => t;
 type Interp = (a: V3, b: V3, k: number) => V3;
-type NKey = readonly [number, number, Ease?];
-type PKey = readonly [number, V3, Ease?, Interp?];
+export type NKey = readonly [number, number, Ease?];
+export type PKey = readonly [number, V3, Ease?, Interp?];
 
 /** Piecewise track of numbers; each key's ease shapes the segment that ends on it. */
-function tr(keys: readonly NKey[], t: number): number {
+export function tr(keys: readonly NKey[], t: number): number {
   if (t <= keys[0][0]) return keys[0][1];
   for (let i = 1; i < keys.length; i++) {
     const [t1, v1, e] = keys[i];
@@ -41,7 +41,7 @@ function tr(keys: readonly NKey[], t: number): number {
 }
 
 /** Piecewise path of points; a key may also say how to travel (straight line or arc). */
-function path(keys: readonly PKey[], t: number): V3 {
+export function path(keys: readonly PKey[], t: number): V3 {
   if (t <= keys[0][0]) return keys[0][1];
   for (let i = 1; i < keys.length; i++) {
     const [t1, p1, e, f] = keys[i];

@@ -181,6 +181,10 @@ export interface FighterState {
 
   grabPartner: number;
   grabMove: string | null;
+  /** LMB pressed during the hold: the alternative (showcase) throw. */
+  grabAlt: boolean;
+  /** Playing a cinematic throw (thrower or victim): untouchable, locked in the scene. */
+  cine: boolean;
 
   koTimer: number;
 
@@ -283,5 +287,8 @@ export type GameEvent =
   | { type: 'ricochetPlan'; fighter: number; target: number; points: Vec3[] }
   | { type: 'ignite'; fighter: number; by: number }
   | { type: 'burn'; fighter: number; damage: number; by: number }
+  /** A cinematic throw starts (both fighters play the scene from now on). */
+  | { type: 'cinematic'; attacker: number; victim: number; move: string }
+  | { type: 'cineBeat'; attacker: number; victim: number; index: number; damage: number; point: Vec3 }
 
 export type GameEventType = GameEvent['type'];

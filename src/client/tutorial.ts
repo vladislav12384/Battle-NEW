@@ -58,6 +58,8 @@ export const MOVE_NAMES: Record<string, string> = {
   point_blank: 'Выстрел в упор',
   gene_splice: 'Генный сплайс',
   mega_beam: 'Мега-луч',
+  grab_cyclops: 'Бросок',
+  cyclops_showcase: 'Небесный луч',
 };
 
 export const moveName = (id: string | null | undefined, fallback = ''): string =>

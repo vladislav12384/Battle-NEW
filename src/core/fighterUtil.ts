@@ -119,6 +119,8 @@ export function createFighterState(
     wallNZ: 0,
     grabPartner: -1,
     grabMove: null,
+    grabAlt: false,
+    cine: false,
     koTimer: 0,
     input: createInputBuffer(),
     lastInput: neutralInput(yaw),
@@ -147,6 +149,7 @@ export function enterState(f: FighterState, s: StateId, stun = 0): void {
     f.beamFrames = 0;
   }
   if (s !== 'ground') f.running = false;
+  if (s !== 'grabbing' && s !== 'grabbed') f.cine = false;
 }
 
 /**
@@ -224,6 +227,8 @@ export function dodgeWindow(f: FighterState, m: MoveDef | null, from: Vec3): num
 
 /** What the fighter is currently immune to. */
 export function invulnerability(sim: SimContext, f: FighterState): Invuln {
+  // Both sides of a cinematic throw are out of the fight until the scene ends.
+  if (f.cine) return 'all';
   switch (f.state) {
     case 'dodge':
       return f.stateFrame >= dodgeInvulnStart(f) && f.stateFrame <= f.dodgeInvulnEnd ? 'all' : 'none';
